@@ -174,19 +174,22 @@ class MOCAST_4(nn.Module):
         self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
 
         if train:
-            t_n = np.array(range(1, out_frames + 1), dtype=np.float32) / out_frames
+            t_n = np.array(range(-2, out_frames + 1), dtype=np.float32) / out_frames
             self.sm = None
         else:
             t_n = np.array(range(1, out_frames + 1), dtype=np.float32) / out_frames
             self.sm = nn.Softmax(dim=1)
         self.tmat = torch.from_numpy(np.vstack([t_n ** i for i in range(degree, -1, -1)]))
 
-    def forward(self, x, device, state=None):
+    def forward(self, x, device, state=None, state_len=None):
         enc_h_s = torch.zeros(1, x.size(0), 32).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 32).to(device)
 
+        state_len = torch.clamp(state_len, min=1)
+        state = torch.nn.utils.rnn.pack_padded_sequence(state, state_len.to('cpu'), batch_first=True, enforce_sorted=False).float()
         out, _ = self.enc_lstm(state, (enc_h_s, enc_c_s))
-        out = torch.cat((self.resnet(x), out[:, -1, :]), dim=1)
+        out, _ = torch.nn.utils.rnn.pad_packed_sequence(out, batch_first=True)
+        out = torch.cat((self.resnet(x), out[torch.arange(out.size(0)), state_len - 1, :]), dim=1)
 
         # out = torch.cat(self.modes * [out], dim=1).view(-1, self.modes, 128)
 

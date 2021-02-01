@@ -20,19 +20,28 @@ from nuscenes.prediction.input_representation.combinators import Rasterizer
 
 
 def get_agent_state_hist(sample_annot, helper):
-    state_vec = np.zeros((7, 3))
+    state_vec = np.zeros((3, 7), dtype=np.float)
+    vel, acc, yawr = [], [], []
     hist_annot = [sample_annot] + helper._iterate(sample_annot, 3, 'prev')
-    for i, h in enumerate(hist_annot):
-        state_vec[i][0] = helper.get_velocity_for_agent(h['instance_token'], h['sample_token'])
+    for h in hist_annot:
+        temp = helper.get_velocity_for_agent(h['instance_token'], h['sample_token'])
+        if not np.isnan(temp):
+            vel.append(temp)
 
-        state_vec[i][1] = helper.get_acceleration_for_agent(h['instance_token'], h['sample_token'])
+        temp = helper.get_acceleration_for_agent(h['instance_token'], h['sample_token'])
+        if not np.isnan(temp):
+            acc.append(temp)
 
-        state_vec[i][2] = helper.get_heading_change_rate_for_agent(h['instance_token'], h['sample_token'])
+        temp = helper.get_heading_change_rate_for_agent(h['instance_token'], h['sample_token'])
+        if not np.isnan(temp):
+            yawr.append(temp)
 
-    state_vec = np.nan_to_num(state_vec)
-    state_vec_ = torch.flip(torch.Tensor(state_vec), [0])
+    if acc:
+        state_vec[0, :len(acc)] = np.flip(vel[:len(acc)])
+        state_vec[1, :len(acc)] = np.flip(np.array(acc))
+        state_vec[2, :len(acc)] = np.flip(yawr[:len(acc)])
 
-    return state_vec_
+    return state_vec.T, len(acc)
 
 
 def process_annot(sample, helper, input_rep):
@@ -43,10 +52,22 @@ def process_annot(sample, helper, input_rep):
     sample_ann = helper.get_sample_annotation(instance_token, sample_token)
     img = input_rep.make_input_representation(instance_token, sample_token)
     future_xy = helper.get_future_for_agent(instance_token, sample_token, seconds=5, in_agent_frame=True)
+    past_xy = helper.get_past_for_agent(instance_token, sample_token, seconds=3, in_agent_frame=True)
+    past_xy = np.concatenate(([[0, 0]], past_xy), axis=0)
+    past_mask = np.ones((past_xy.shape[0]))
+
+    past_xy = np.pad(past_xy, ((0, 7 - past_xy.shape[0]), (0, 0)), 'constant')
+    past_mask = np.pad(past_mask, (0, 7 - past_mask.shape[0]), 'constant')
+
+    state_vec, seq_len = get_agent_state_hist(sample_ann, helper)
 
     dict['image'] = torch.Tensor(img).permute(2, 0, 1)
-    dict['agent_state'] = get_agent_state_hist(sample_ann, helper)
+    dict['agent_state'] = state_vec
+    dict['agent_state_len'] = seq_len
     dict['agent_future'] = torch.Tensor(future_xy)
+    dict['agent_past'] = torch.Tensor(past_xy)
+    dict['mask_past'] = torch.Tensor(past_mask)
+    dict['mask_future'] = torch.ones(future_xy.shape[0])
 
     count += 1
     return dict

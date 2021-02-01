@@ -25,7 +25,7 @@ train_set = get_prediction_challenge_split("mini_train", dataroot=NUSCENES_DATAS
 
 helper = PredictHelper(nuscenes)
 
-instance_token, sample_token = train_set[0].split("_")
+instance_token, sample_token = train_set[100].split("_")
 
 annot1 = helper.get_sample_annotation(instance_token, sample_token)
 

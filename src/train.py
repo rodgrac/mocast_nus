@@ -1,9 +1,11 @@
 import os
 import sys
 import torch
+import time
 import numpy as np
 from tqdm import tqdm
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 from model import *
 from process_ds import *
@@ -20,11 +22,16 @@ def find_closest_traj(pred, gt):
 
 def forward_mm(data, model, device, criterion):
     inputs = data["image"].to(device)
+    agent_seq_len = data["agent_state_len"].to(device)
+    history_window = torch.flip(data["agent_past"][:, :3, :], [1]).to(device)
+    history_mask = torch.flip(data['mask_past'][:, :3], [1]).to(device)
 
     targets = data["agent_future"].to(device)
+    targets = torch.cat((history_window, targets), dim=1)
+    target_mask = torch.cat((history_mask, data['mask_target'].to(device)), dim=1)
 
     # Forward pass
-    outputs, scores = model(inputs, device, data["agent_state"].to(device))
+    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
 
     labels = find_closest_traj(outputs.cpu().detach().numpy(), targets.cpu().detach().numpy()).to(device)
 
@@ -32,7 +39,7 @@ def forward_mm(data, model, device, criterion):
     loss_cls = criterion[1](scores, labels)
     loss = loss_reg + loss_cls
     # not all the output steps are valid, but we can filter them out from the loss using availabilities
-    # loss = loss * target_availabilities
+    loss = loss * target_mask
     loss = loss.mean()
     return loss, outputs
 
@@ -89,3 +96,11 @@ criterion_cls = nn.CrossEntropyLoss()
 
 # Training
 losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls])
+
+time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
+torch.save(model.state_dict(), '../models/' + model.__class__.__name__ + time_string + '.pth')
+print("Saved model as ../models/" + model.__class__.__name__ + time_string + '.pth')
+
+plt.plot(np.arange(len(losses_train)), losses_train, label="train loss")
+plt.legend()
+plt.show()
