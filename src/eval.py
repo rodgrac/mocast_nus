@@ -7,9 +7,11 @@ import numpy as np
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 
 from model import MOCAST_4
 from process_ds import load_obj
+from render_prediction import render_map, render_trajectories
 
 sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
 
@@ -53,7 +55,7 @@ pred_helper = PredictHelper(nuscenes)
 
 val_dl = DataLoader(val_ds, shuffle=False, batch_size=16, num_workers=16)
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 model = MOCAST_4(3, 10, 5, 10, 16, train=False).to(device)
 
@@ -69,18 +71,51 @@ val_tokens = []
 progress_bar = tqdm(val_dl)
 for data in progress_bar:
     outputs, scores = forward_mm(data, model, device)
-    val_out.extend(outputs)
-    val_scores.extend(scores)
+    val_out.extend(outputs.cpu().numpy())
+    val_scores.extend(scores.cpu().numpy())
     val_tokens.extend(data["token"])
 
 model_preds = []
 for output, score, token in zip(val_out, val_scores, val_tokens):
-    model_preds.append(dump_predictions(output.cpu().numpy(), score.cpu().numpy(), token, pred_helper))
+    model_preds.append(dump_predictions(output, score, token, pred_helper))
 
 json.dump(model_preds, open(os.path.join('../out', 'model_preds.json'), "w"))
 
-config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
-results = compute_metrics(model_preds, pred_helper, config)
-json.dump(results, open(os.path.join('../out', 'metrics.json'), "w"), indent=2)
+'''############################ Quantitative ###########################################'''
+# config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
+# results = compute_metrics(model_preds, pred_helper, config)
+# json.dump(results, open(os.path.join('../out', 'metrics.json'), "w"), indent=2)
+# print(json.dumps(results, indent=4, sort_keys=True))
 
-print(results.items())
+'''############################ Qualitative ###########################################'''
+for i in range(20, len(val_out), 10):
+    img = render_map(pred_helper, val_tokens[i])
+    gt_cord = render_trajectories(pred_helper, val_tokens[i])
+
+    fig, ax = plt.subplots(1, 1)
+    ax.grid(b=None)
+    ax.imshow(img)
+    ax.plot(gt_cord[:, 0],
+            gt_cord[:, 1],
+            'w--o',
+            linewidth=4,
+            markersize=3,
+            zorder=650,
+            path_effects=[pe.Stroke(linewidth=5, foreground='r'), pe.Normal()])
+
+    top_3 = np.argsort(val_scores[i])[-1:-4:-1]
+    for ind in top_3:
+        pred_cord = render_trajectories(pred_helper, val_tokens[i], val_out[i][ind])
+
+        ax.plot(pred_cord[:, 0],
+                pred_cord[:, 1],
+                'w--o',
+                linewidth=4,
+                markersize=3,
+                zorder=650,
+                path_effects=[pe.Stroke(linewidth=5, foreground='b'), pe.Normal()])
+        plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
+
+    break
+#
+plt.show()
