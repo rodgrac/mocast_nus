@@ -28,7 +28,7 @@ def forward_mm(data, model, device, criterion):
 
     targets = data["agent_future"].to(device)
     targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, data['mask_target'].to(device)), dim=1)
+    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
 
     # Forward pass
     outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
@@ -39,7 +39,7 @@ def forward_mm(data, model, device, criterion):
     loss_cls = criterion[1](scores, labels)
     loss = loss_reg + loss_cls
     # not all the output steps are valid, but we can filter them out from the loss using availabilities
-    loss = loss * target_mask
+    loss = loss * torch.unsqueeze(target_mask, 2)
     loss = loss.mean()
     return loss, outputs
 
@@ -47,7 +47,7 @@ def forward_mm(data, model, device, criterion):
 def train(model, train_dataloader, device, criterion):
     # ==== TRAIN LOOP
     tr_it = iter(train_dataloader)
-    progress_bar = tqdm(range(1000))
+    progress_bar = tqdm(range(10))
     losses_train = []
 
     optimizer = optim.Adam(model.parameters(), 1e-3, weight_decay=1e-4)
@@ -83,13 +83,13 @@ def train(model, train_dataloader, device, criterion):
 
 torch.cuda.empty_cache()
 
-train_ds = load_obj('../datasets/nuScenes/processed/nuscenes-mini-p.pkl')
+train_ds = load_obj('../datasets/nuScenes/processed/nuscenes-mini-train.pkl')
 
 train_dl = DataLoader(train_ds, shuffle=True, batch_size=16, num_workers=16)
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST_4(3, 10, 5, 3, 16).to(device)
+model = MOCAST_4(3, 10, 5, 10, 16).to(device)
 
 criterion_reg = nn.MSELoss(reduction="none")
 criterion_cls = nn.CrossEntropyLoss()

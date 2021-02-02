@@ -16,7 +16,7 @@ def to_device(data, device):
 
 
 def save_obj(data, path):
-    with open(path + '/nuscenes-mini-p.pkl', 'wb') as f:
+    with open(path, 'wb') as f:
         pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
 
 

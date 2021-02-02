@@ -203,7 +203,7 @@ class MOCAST_4(nn.Module):
         out_y = torch.matmul(out[:, :, self.degree + 1:-1], self.tmat)
 
         if self.sm:
-            (_, top_idx) = torch.topk(out[:, :, -1], 3)
+            (_, top_idx) = torch.topk(out[:, :, -1], 10)
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             out = torch.gather(out, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out.size(2)))

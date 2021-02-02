@@ -46,7 +46,7 @@ def get_agent_state_hist(sample_annot, helper):
 
 def process_annot(sample, helper, input_rep):
     global count, total_c
-    print('Processed {}/{}'.format(count, total_c))
+    print('Processing {}/{}'.format(count, total_c))
     dict = {}
     instance_token, sample_token = sample.split("_")
     sample_ann = helper.get_sample_annotation(instance_token, sample_token)
@@ -68,6 +68,7 @@ def process_annot(sample, helper, input_rep):
     dict['agent_past'] = torch.Tensor(past_xy)
     dict['mask_past'] = torch.Tensor(past_mask)
     dict['mask_future'] = torch.ones(future_xy.shape[0])
+    dict['token'] = sample
 
     count += 1
     return dict
@@ -93,10 +94,18 @@ def nuScenes_process(ds, helper):
 if __name__ == "__main__":
     NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
 
+    # ----------------------------------------Train Set --------------------------------------------------------------#
+    print("Packing training set")
     count = 0
-
     train_set, helper = nuScenes_load('v1.0-mini', "mini_train", NUSCENES_DATASET)
     total_c = len(train_set)
     train_ds = nuScenes_process(train_set, helper)
+    save_obj(train_ds, '../datasets/nuScenes/processed/nuscenes-mini-train.pkl')
 
-    save_obj(train_ds, '../datasets/nuScenes/processed')
+    # ----------------------------------------Val Set ----------------------------------------------------------------#
+    print("Packing val set")
+    count = 0
+    val_set, helper = nuScenes_load('v1.0-mini', "mini_val", NUSCENES_DATASET)
+    total_c = len(val_set)
+    val_ds = nuScenes_process(val_set, helper)
+    save_obj(val_ds, '../datasets/nuScenes/processed/nuscenes-mini-val.pkl')
