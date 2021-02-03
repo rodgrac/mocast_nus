@@ -1,6 +1,11 @@
 import os
+import sys
 import yaml
 import pickle
+import json
+
+sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
+from nuscenes.eval.prediction.compute_metrics import compute_metrics
 
 
 def load_config_data(path):
@@ -23,3 +28,10 @@ def save_obj(data, path):
 def load_obj(path):
     with open(path, 'rb') as f:
         return pickle.load(f)
+
+
+def eval_metrics(pred_file, helper, config, out_file):
+    predictions = json.load(open(pred_file, "r"))
+    results = compute_metrics(predictions, helper, config)
+    json.dump(results, open(out_file, "w"), indent=2)
+    print(json.dumps(results, indent=4, sort_keys=True))

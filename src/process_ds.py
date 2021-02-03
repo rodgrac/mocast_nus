@@ -74,13 +74,10 @@ def process_annot(sample, helper, input_rep):
     return dict
 
 
-def nuScenes_load(ds_name, ds_type, dataroot):
+def nuScenes_load(ds_name, dataroot):
     nuscenes = NuScenes(ds_name, dataroot=dataroot)
-    pred_helper = PredictHelper(nuscenes)
-
-    train_set = get_prediction_challenge_split(ds_type, dataroot=dataroot)
-
-    return train_set, pred_helper
+    helper = PredictHelper(nuscenes)
+    return helper
 
 
 def nuScenes_process(ds, helper):
@@ -93,11 +90,13 @@ def nuScenes_process(ds, helper):
 
 if __name__ == "__main__":
     NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
+    helper = nuScenes_load('v1.0-mini', NUSCENES_DATASET)
 
     # ----------------------------------------Train Set --------------------------------------------------------------#
     print("Packing training set")
     count = 0
-    train_set, helper = nuScenes_load('v1.0-mini', "mini_train", NUSCENES_DATASET)
+    train_set = get_prediction_challenge_split("mini_train", dataroot=NUSCENES_DATASET)
+
     total_c = len(train_set)
     train_ds = nuScenes_process(train_set, helper)
     save_obj(train_ds, '../datasets/nuScenes/processed/nuscenes-mini-train.pkl')
@@ -105,7 +104,8 @@ if __name__ == "__main__":
     # ----------------------------------------Val Set ----------------------------------------------------------------#
     print("Packing val set")
     count = 0
-    val_set, helper = nuScenes_load('v1.0-mini', "mini_val", NUSCENES_DATASET)
+    val_set = get_prediction_challenge_split("mini_val", dataroot=NUSCENES_DATASET)
+
     total_c = len(val_set)
     val_ds = nuScenes_process(val_set, helper)
     save_obj(val_ds, '../datasets/nuScenes/processed/nuscenes-mini-val.pkl')

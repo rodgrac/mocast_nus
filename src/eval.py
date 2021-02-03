@@ -12,13 +12,13 @@ import matplotlib.patheffects as pe
 from model import MOCAST_4
 from process_ds import load_obj
 from render_prediction import render_map, render_trajectories
+from utils import eval_metrics
 
 sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
 
 from nuscenes.nuscenes import NuScenes
 from nuscenes.prediction.helper import PredictHelper
 from nuscenes.eval.prediction.data_classes import Prediction
-from nuscenes.eval.prediction.compute_metrics import compute_metrics
 from nuscenes.eval.prediction.config import load_prediction_config
 from nuscenes.prediction.helper import convert_local_coords_to_global
 
@@ -79,13 +79,14 @@ model_preds = []
 for output, score, token in zip(val_out, val_scores, val_tokens):
     model_preds.append(dump_predictions(output, score, token, pred_helper))
 
-json.dump(model_preds, open(os.path.join('../out', 'model_preds.json'), "w"))
+json.dump(model_preds, open(os.path.join('../out', 'mocast4_preds.json'), "w"))
+
 
 '''############################ Quantitative ###########################################'''
-# config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
-# results = compute_metrics(model_preds, pred_helper, config)
-# json.dump(results, open(os.path.join('../out', 'metrics.json'), "w"), indent=2)
-# print(json.dumps(results, indent=4, sort_keys=True))
+config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
+print("[Eval] MOCAST4 metrics")
+eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
+
 
 '''############################ Qualitative ###########################################'''
 for i in range(20, len(val_out), 10):
