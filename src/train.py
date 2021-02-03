@@ -47,12 +47,12 @@ def forward_mm(data, model, device, criterion):
 def train(model, train_dataloader, device, criterion):
     # ==== TRAIN LOOP
     tr_it = iter(train_dataloader)
-    progress_bar = tqdm(range(10))
+    progress_bar = tqdm(range(5000))
     losses_train = []
 
     optimizer = optim.Adam(model.parameters(), 1e-3, weight_decay=1e-4)
 
-    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=1000,
+    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=5000,
                                                 steps_per_epoch=len(train_dataloader))
 
     for _ in progress_bar:

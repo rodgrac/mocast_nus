@@ -48,7 +48,7 @@ def dump_predictions(pred_out, scores, token, helper):
 torch.cuda.empty_cache()
 
 val_ds = load_obj('../datasets/nuScenes/processed/nuscenes-mini-val.pkl')
-model_path = "../models/MOCAST_4_02_01_2021_22_07_15.pth"
+model_path = "../models/MOCAST_4_02_03_2021_15_54_20.pth"
 
 nuscenes = NuScenes('v1.0-mini', dataroot=NUSCENES_DATASET)
 pred_helper = PredictHelper(nuscenes)
@@ -89,7 +89,7 @@ eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_m
 
 
 '''############################ Qualitative ###########################################'''
-for i in range(20, len(val_out), 10):
+for i in range(0, len(val_out), 5):
     img = render_map(pred_helper, val_tokens[i])
     gt_cord = render_trajectories(pred_helper, val_tokens[i])
 
@@ -116,7 +116,5 @@ for i in range(20, len(val_out), 10):
                 zorder=650,
                 path_effects=[pe.Stroke(linewidth=5, foreground='b'), pe.Normal()])
         plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
-
-    break
 #
 plt.show()
