@@ -19,8 +19,8 @@ from nuscenes.prediction.input_representation.interface import InputRepresentati
 from nuscenes.prediction.input_representation.combinators import Rasterizer
 
 
-def get_agent_state_hist(sample_annot, helper):
-    state_vec = np.zeros((3, 7), dtype=np.float)
+def get_agent_state_hist(sample_annot, helper, past_xy):
+    state_vec = np.zeros((5, 7), dtype=np.float)
     vel, acc, yawr = [], [], []
     hist_annot = [sample_annot] + helper._iterate(sample_annot, 3, 'prev')
     for h in hist_annot:
@@ -37,9 +37,11 @@ def get_agent_state_hist(sample_annot, helper):
             yawr.append(temp)
 
     if acc:
-        state_vec[0, :len(acc)] = np.flip(vel[:len(acc)])
-        state_vec[1, :len(acc)] = np.flip(np.array(acc))
-        state_vec[2, :len(acc)] = np.flip(yawr[:len(acc)])
+        state_vec[0, :len(acc)] = np.flip(past_xy[:len(acc), 0])
+        state_vec[1, :len(acc)] = np.flip(past_xy[:len(acc), 1])
+        state_vec[2, :len(acc)] = np.flip(vel[:len(acc)])
+        state_vec[3, :len(acc)] = np.flip(np.array(acc))
+        state_vec[4, :len(acc)] = np.flip(yawr[:len(acc)])
 
     return state_vec.T, len(acc)
 
@@ -51,7 +53,7 @@ def process_annot(sample, helper, input_rep):
     instance_token, sample_token = sample.split("_")
     sample_ann = helper.get_sample_annotation(instance_token, sample_token)
     img = input_rep.make_input_representation(instance_token, sample_token)
-    future_xy = helper.get_future_for_agent(instance_token, sample_token, seconds=5, in_agent_frame=True)
+    future_xy = helper.get_future_for_agent(instance_token, sample_token, seconds=6, in_agent_frame=True)
     past_xy = helper.get_past_for_agent(instance_token, sample_token, seconds=3, in_agent_frame=True)
     past_xy = np.concatenate(([[0, 0]], past_xy), axis=0)
     past_mask = np.ones((past_xy.shape[0]))
@@ -59,7 +61,7 @@ def process_annot(sample, helper, input_rep):
     past_xy = np.pad(past_xy, ((0, 7 - past_xy.shape[0]), (0, 0)), 'constant')
     past_mask = np.pad(past_mask, (0, 7 - past_mask.shape[0]), 'constant')
 
-    state_vec, seq_len = get_agent_state_hist(sample_ann, helper)
+    state_vec, seq_len = get_agent_state_hist(sample_ann, helper, past_xy)
 
     dict['image'] = torch.Tensor(img).permute(2, 0, 1)
     dict['agent_state'] = state_vec
@@ -90,22 +92,32 @@ def nuScenes_process(ds, helper):
 
 if __name__ == "__main__":
     NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
-    helper = nuScenes_load('v1.0-mini', NUSCENES_DATASET)
+    # ds_type = 'v1.0-mini'
+    ds_type = 'v1.0-trainval'
+    helper = nuScenes_load(ds_type, NUSCENES_DATASET)
 
     # ----------------------------------------Train Set --------------------------------------------------------------#
     print("Packing training set")
     count = 0
-    train_set = get_prediction_challenge_split("mini_train", dataroot=NUSCENES_DATASET)
+    train_set = get_prediction_challenge_split("train", dataroot=NUSCENES_DATASET)
+    print("Packed training set of length {}".format(len(train_set)))
 
     total_c = len(train_set)
-    train_ds = nuScenes_process(train_set, helper)
-    save_obj(train_ds, '../datasets/nuScenes/processed/nuscenes-mini-train.pkl')
+    split_ind = np.append(np.arange(0, total_c, 5000), total_c)
+
+    for i in range(len(split_ind)-1):
+        train_ds = nuScenes_process(train_set[split_ind[i]:split_ind[i+1]], helper)
+        save_obj(train_ds,
+                 '/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-train_{}.pkl'.format(ds_type.split('-')[-1],
+                                                                                               i+1))
+        break
 
     # ----------------------------------------Val Set ----------------------------------------------------------------#
     print("Packing val set")
     count = 0
-    val_set = get_prediction_challenge_split("mini_val", dataroot=NUSCENES_DATASET)
+    val_set = get_prediction_challenge_split("val", dataroot=NUSCENES_DATASET)
+    print("Packed validation set of length {}".format(len(val_set)))
 
     total_c = len(val_set)
-    val_ds = nuScenes_process(val_set, helper)
-    save_obj(val_ds, '../datasets/nuScenes/processed/nuscenes-mini-val.pkl')
+    val_ds = nuScenes_process(val_set[:500], helper)
+    save_obj(val_ds, '/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-val.pkl'.format(ds_type))

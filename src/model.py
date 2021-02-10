@@ -162,14 +162,16 @@ class MOCAST_4(nn.Module):
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
-        self.resnet.fc = nn.Linear(in_features=2048, out_features=240)
+        self.resnet.fc = nn.Linear(in_features=2048, out_features=448)
 
         print("Num modes: ", self.modes)
 
-        self.state_fc = nn.Linear(in_features=3, out_features=16)
-        self.enc_lstm = nn.LSTM(16, 16, batch_first=True)
+        self.state_fc = nn.Linear(in_features=5, out_features=64)
+        self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
 
-        self.final_fc1 = nn.Linear(in_features=256, out_features=256)
+        self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
+
+        self.final_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU()
 
         self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
@@ -183,15 +185,20 @@ class MOCAST_4(nn.Module):
         self.tmat = torch.from_numpy(np.vstack([t_n ** i for i in range(degree, -1, -1)]))
 
     def forward(self, x, device, state=None, state_len=None):
-        enc_h_s = torch.zeros(1, x.size(0), 16).to(device)
-        enc_c_s = torch.zeros(1, x.size(0), 16).to(device)
+        enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
+        enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
+        enc_h_s = nn.init.xavier_normal_(enc_h_s)
+        enc_c_s = nn.init.xavier_normal_(enc_c_s)
 
         state = self.state_fc(state.float())
         state_len = torch.clamp(state_len, min=1)
         state = torch.nn.utils.rnn.pack_padded_sequence(state, state_len.to('cpu'), batch_first=True, enforce_sorted=False).float()
         out, _ = self.enc_lstm(state, (enc_h_s, enc_c_s))
         out, _ = torch.nn.utils.rnn.pad_packed_sequence(out, batch_first=True)
-        out = torch.cat((self.resnet(x), out[torch.arange(out.size(0)), state_len - 1, :]), dim=1)
+
+        out = self.enc_lstm_fc(out[torch.arange(out.size(0)), state_len - 1, :])
+
+        out = torch.cat((self.resnet(x), out), dim=1)
 
         # out = torch.cat(self.modes * [out], dim=1).view(-1, self.modes, 128)
 

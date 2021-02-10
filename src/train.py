@@ -5,11 +5,17 @@ import time
 import numpy as np
 from tqdm import tqdm
 from torch.utils.data import DataLoader
+from torchvision import transforms
+import torch.nn as nn
 import matplotlib.pyplot as plt
 
-from model import *
+from model import MOCAST_4
 from process_ds import *
 from utils import *
+
+
+# Prints whole tensor for debug
+# torch.set_printoptions(profile="full")
 
 
 def find_closest_traj(pred, gt):
@@ -20,8 +26,9 @@ def find_closest_traj(pred, gt):
     return labels
 
 
-def forward_mm(data, model, device, criterion):
-    inputs = data["image"].to(device)
+def forward_mm(data, model, device, criterion, transform):
+    inputs = (data["image"] / 255.0).to(device)
+    inputs = transform(inputs)
     agent_seq_len = data["agent_state_len"].to(device)
     history_window = torch.flip(data["agent_past"][:, :3, :], [1]).to(device)
     history_mask = torch.flip(data['mask_past'][:, :3], [1]).to(device)
@@ -43,58 +50,60 @@ def forward_mm(data, model, device, criterion):
     return loss, outputs
 
 
-def train(model, train_dataloader, device, criterion):
+def train(model, train_dataloader, device, criterion, transforms):
     # ==== TRAIN LOOP
-    tr_it = iter(train_dataloader)
-    progress_bar = tqdm(range(5000))
-    losses_train = []
+    epochs = 15
+    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
 
-    optimizer = optim.Adam(model.parameters(), 1e-3, weight_decay=1e-4)
-
-    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=5000,
+    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
                                                 steps_per_epoch=len(train_dataloader))
+    epoch_mean_loss = []
+    for epoch in range(epochs):
+        losses_train = []
+        progress_bar = tqdm(train_dataloader)
+        for data in progress_bar:
+            model.train()
+            torch.set_grad_enabled(True)
+            loss, _ = forward_mm(data, model, device, criterion, transforms)
 
-    for _ in progress_bar:
-        try:
-            data = next(tr_it)
-        except StopIteration:
-            tr_it = iter(train_dataloader)
-            data = next(tr_it)
-        model.train()
-        torch.set_grad_enabled(True)
-        loss, _ = forward_mm(data, model, device, criterion)
+            optimizer.zero_grad()
+            # Backward pass
+            loss.backward()
 
-        # Backward pass
-        loss.backward()
+            # nn.utils.clip_grad_value_(model.parameters(), 0.1)
 
-        nn.utils.clip_grad_value_(model.parameters(), 0.1)
+            optimizer.step()
+            sched.step()
 
-        optimizer.step()
-        optimizer.zero_grad()
+            losses_train.append(loss.cpu().detach().item())
+            progress_bar.set_description(
+                f"Epoch: {epoch + 1}/{epochs} loss: {loss.cpu().detach().item()} loss(avg): {np.mean(losses_train)}")
 
-        sched.step()
+        epoch_mean_loss.append(np.mean(losses_train))
 
-        losses_train.append(loss.cpu().detach().item())
-        progress_bar.set_description(f"loss: {loss.cpu().detach().item()} loss(avg): {np.mean(losses_train)}")
-
-    return losses_train
+    return epoch_mean_loss
 
 
 torch.cuda.empty_cache()
 
-train_ds = load_obj('../datasets/nuScenes/processed/nuscenes-mini-train.pkl')
+# train_ds = load_obj('../datasets/nuScenes/processed/nuscenes-mini-train.pkl')
+train_ds = load_obj('/scratch/rodney/datasets/nuScenes/processed/nuscenes-trainval-train_1.pkl')
+# train_ds2 = load_obj('/scratch/rodney/datasets/nuScenes/processed/nuscenes-trainval-train_2.pkl')
 
 train_dl = DataLoader(train_ds, shuffle=True, batch_size=16, num_workers=16)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST_4(3, 10, 5, 10, 16).to(device)
+model = MOCAST_4(3, 12, 5, 10, 16).to(device)
+
+normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
 
 criterion_reg = nn.MSELoss(reduction="none")
 criterion_cls = nn.CrossEntropyLoss()
 
 # Training
-losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls])
+losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls], normalize)
 
 time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
 torch.save(model.state_dict(), '../models/' + model.__class__.__name__ + time_string + '.pth')

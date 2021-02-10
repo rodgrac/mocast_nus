@@ -6,6 +6,7 @@ import json
 import numpy as np
 from tqdm import tqdm
 from torch.utils.data import DataLoader
+import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 
@@ -25,8 +26,9 @@ from nuscenes.prediction.helper import convert_local_coords_to_global
 NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
 
 
-def forward_mm(data, model, device):
-    inputs = data["image"].to(device)
+def forward_mm(data, model, device, transforms):
+    inputs = (data["image"]/255.0).to(device)
+    inputs = transforms(inputs)
     agent_seq_len = data["agent_state_len"].to(device)
 
     # Forward pass
@@ -48,16 +50,20 @@ def dump_predictions(pred_out, scores, token, helper):
 torch.cuda.empty_cache()
 
 val_ds = load_obj('../datasets/nuScenes/processed/nuscenes-mini-val.pkl')
-model_path = "../models/MOCAST_4_02_03_2021_15_54_20.pth"
+#val_ds = load_obj('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-val.pkl')
+model_path = "../models/MOCAST_4_02_10_2021_17_23_09.pth"
 
 nuscenes = NuScenes('v1.0-mini', dataroot=NUSCENES_DATASET)
 pred_helper = PredictHelper(nuscenes)
 
 val_dl = DataLoader(val_ds, shuffle=False, batch_size=16, num_workers=16)
 
+normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
+
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST_4(3, 10, 5, 10, 16, train=False).to(device)
+model = MOCAST_4(3, 12, 5, 10, 16, train=False).to(device)
 
 print("Loading model ", model_path)
 model.load_state_dict(torch.load(model_path))
@@ -70,7 +76,14 @@ val_scores = []
 val_tokens = []
 progress_bar = tqdm(val_dl)
 for data in progress_bar:
-    outputs, scores = forward_mm(data, model, device)
+    outputs, scores = forward_mm(data, model, device, normalize)
+
+    # tmp1 = torch.cat((outputs, torch.ones(outputs.size(0), 10, 13, 1).to(device)), dim=3).permute(0, 1, 3, 2)
+    # tmp2 = torch.cat((torch.flip(data['agent_past'][:, :3, :], [1]), torch.ones(outputs.size(0), 3, 1)), dim=2).unsqueeze(1).permute(
+    #     0, 1, 3, 2).to(device)
+    # A = torch.matmul(tmp2, torch.inverse(tmp1[:, :, :, :3]))
+    # outputs = torch.matmul(A, tmp1).permute(0, 1, 3, 2)[:, :, 3:, :2]
+
     val_out.extend(outputs.cpu().numpy())
     val_scores.extend(scores.cpu().numpy())
     val_tokens.extend(data["token"])
@@ -81,13 +94,11 @@ for output, score, token in zip(val_out, val_scores, val_tokens):
 
 json.dump(model_preds, open(os.path.join('../out', 'mocast4_preds.json'), "w"))
 
-
 '''############################ Quantitative ###########################################'''
 config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
 print("[Eval] MOCAST4 metrics")
 eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
-
-
+exit()
 '''############################ Qualitative ###########################################'''
 for i in range(0, len(val_out), 5):
     img = render_map(pred_helper, val_tokens[i])
