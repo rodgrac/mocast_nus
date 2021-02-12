@@ -192,11 +192,12 @@ class MOCAST_4(nn.Module):
 
         state = self.state_fc(state.float())
         state_len = torch.clamp(state_len, min=1)
-        state = torch.nn.utils.rnn.pack_padded_sequence(state, state_len.to('cpu'), batch_first=True, enforce_sorted=False).float()
+
+        state = torch.nn.utils.rnn.pack_padded_sequence(state, state_len.to('cpu'), batch_first=True,
+                                                        enforce_sorted=False).float()
         out, _ = self.enc_lstm(state, (enc_h_s, enc_c_s))
         out, _ = torch.nn.utils.rnn.pad_packed_sequence(out, batch_first=True)
-
-        out = self.enc_lstm_fc(out[torch.arange(out.size(0)), state_len - 1, :])
+        out = self.enc_lstm_fc(out[torch.arange(out.size(0)), -1, :])
 
         out = torch.cat((self.resnet(x), out), dim=1)
 

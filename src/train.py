@@ -10,9 +10,7 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 
 from model import MOCAST_4
-from process_ds import *
-from utils import *
-
+from nusc_dataloader import NuScenes_HDF
 
 # Prints whole tensor for debug
 # torch.set_printoptions(profile="full")
@@ -26,10 +24,10 @@ def find_closest_traj(pred, gt):
     return labels
 
 
-def forward_mm(data, model, device, criterion, transform):
-    inputs = (data["image"] / 255.0).to(device)
-    inputs = transform(inputs)
-    agent_seq_len = data["agent_state_len"].to(device)
+def forward_mm(data, model, device, criterion):
+    inputs = data["image"].to(device)
+
+    agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
     history_window = torch.flip(data["agent_past"][:, :3, :], [1]).to(device)
     history_mask = torch.flip(data['mask_past'][:, :3], [1]).to(device)
 
@@ -45,12 +43,14 @@ def forward_mm(data, model, device, criterion, transform):
     loss_cls = criterion[1](scores, labels)
     loss = loss_reg + loss_cls
     # not all the output steps are valid, but we can filter them out from the loss using availabilities
+
     loss = loss * torch.unsqueeze(target_mask, 2)
+
     loss = loss.mean()
     return loss, outputs
 
 
-def train(model, train_dataloader, device, criterion, transforms):
+def train(model, train_dataloader, device, criterion):
     # ==== TRAIN LOOP
     epochs = 15
     optimizer = torch.optim.Adam(model.parameters(), 1e-4)
@@ -64,7 +64,8 @@ def train(model, train_dataloader, device, criterion, transforms):
         for data in progress_bar:
             model.train()
             torch.set_grad_enabled(True)
-            loss, _ = forward_mm(data, model, device, criterion, transforms)
+
+            loss, _ = forward_mm(data, model, device, criterion)
 
             optimizer.zero_grad()
             # Backward pass
@@ -86,28 +87,28 @@ def train(model, train_dataloader, device, criterion, transforms):
 
 torch.cuda.empty_cache()
 
-# train_ds = load_obj('../datasets/nuScenes/processed/nuscenes-mini-train.pkl')
-train_ds = load_obj('/scratch/rodney/datasets/nuScenes/processed/nuscenes-trainval-train_1.pkl')
-# train_ds2 = load_obj('/scratch/rodney/datasets/nuScenes/processed/nuscenes-trainval-train_2.pkl')
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])])
+
+train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
 
 train_dl = DataLoader(train_ds, shuffle=True, batch_size=16, num_workers=16)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 model = MOCAST_4(3, 12, 5, 10, 16).to(device)
-
-normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225])
 
 criterion_reg = nn.MSELoss(reduction="none")
 criterion_cls = nn.CrossEntropyLoss()
 
 # Training
-losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls], normalize)
+losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls])
 
 time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
 torch.save(model.state_dict(), '../models/' + model.__class__.__name__ + time_string + '.pth')
 print("Saved model as ../models/" + model.__class__.__name__ + time_string + '.pth')
+
+train_ds.close_hf()
 
 plt.plot(np.arange(len(losses_train)), losses_train, label="train loss")
 plt.legend()

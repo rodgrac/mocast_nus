@@ -20,12 +20,12 @@ def to_device(data, device):
     return data.to(device, non_blocking=True)
 
 
-def save_obj(data, path):
+def pickle_save_obj(data, path):
     with open(path, 'wb') as f:
         pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
 
 
-def load_obj(path):
+def pickle_load_obj(path):
     with open(path, 'rb') as f:
         return pickle.load(f)
 
@@ -35,3 +35,5 @@ def eval_metrics(pred_file, helper, config, out_file):
     results = compute_metrics(predictions, helper, config)
     json.dump(results, open(out_file, "w"), indent=2)
     print(json.dumps(results, indent=4, sort_keys=True))
+
+
