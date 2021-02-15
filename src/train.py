@@ -94,7 +94,7 @@ train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1
 
 train_dl = DataLoader(train_ds, shuffle=True, batch_size=16, num_workers=16)
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 model = MOCAST_4(3, 12, 5, 10, 16).to(device)
 

@@ -113,33 +113,33 @@ if __name__ == "__main__":
     helper = nuScenes_load(ds_type, NUSCENES_DATASET)
 
     # ----------------------------------------Train Set --------------------------------------------------------------#
-    print("Packing training set")
-    count = 0
-    train_set = get_prediction_challenge_split("train", dataroot=NUSCENES_DATASET)
-    print("Packed training set of length {}".format(len(train_set)))
-    total_c = len(train_set)
-
-    hf = h5py.File('/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-train.h5'.format(ds_type), 'w')
-    grps = [hf.create_group(keys) for keys in GRPS]
-
-    results = nuScenes_process(train_set, helper, grps)
-
-    print("Number of fails: {}".format(np.count_nonzero(np.array(not results))))
-
-    hf.close()
-
-    # # ----------------------------------------Val Set ----------------------------------------------------------------#
-    # print("Packing val set")
+    # print("Packing training set")
     # count = 0
-    # val_set = get_prediction_challenge_split("val", dataroot=NUSCENES_DATASET)
-    # print("Packed validation set of length {}".format(len(val_set)))
-    # total_c = len(val_set)
+    # train_set = get_prediction_challenge_split("train", dataroot=NUSCENES_DATASET)
+    # print("Packed training set of length {}".format(len(train_set)))
+    # total_c = len(train_set)
     #
-    # hf = h5py.File('/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-val.h5'.format(ds_type), 'w')
+    # hf = h5py.File('/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-train.h5'.format(ds_type), 'w')
     # grps = [hf.create_group(keys) for keys in GRPS]
     #
-    # results = nuScenes_process(val_set, helper, grps)
+    # results = nuScenes_process(train_set, helper, grps)
     #
     # print("Number of fails: {}".format(np.count_nonzero(np.array(not results))))
     #
     # hf.close()
+
+    # # ----------------------------------------Val Set ----------------------------------------------------------------#
+    print("Packing val set")
+    count = 0
+    val_set = get_prediction_challenge_split("val", dataroot=NUSCENES_DATASET)
+    print("Packed validation set of length {}".format(len(val_set)))
+    total_c = len(val_set)
+
+    hf = h5py.File('/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-val.h5'.format(ds_type), 'w')
+    grps = [hf.create_group(keys) for keys in GRPS]
+
+    results = nuScenes_process(val_set, helper, grps)
+
+    print("Number of fails: {}".format(np.count_nonzero(np.array(not results))))
+
+    hf.close()

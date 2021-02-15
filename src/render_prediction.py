@@ -45,7 +45,7 @@ def render_trajectories(helper, token, traj=None):
     location = sample_ann['translation'][:2]
     # Render ground truth
     if traj is None:
-        traj = helper.get_future_for_agent(instance, sample, 3, in_agent_frame=False)
+        traj = helper.get_future_for_agent(instance, sample, 6, in_agent_frame=False)
     sample_yaw = quaternion_yaw(Quaternion(sample_ann['rotation']))
     rotation_mat = get_rotation_matrix((800, 800, 3), sample_yaw)
     row_f, col_f = crop_offsets()

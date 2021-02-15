@@ -2,6 +2,8 @@ from torchvision.models.resnet import resnet50
 import torch
 from torch import nn, optim
 import numpy as np
+from orthnet import Legendre, Legendre_Normalized
+from orthnet.backend import NumpyBackend
 import torch.nn.functional as f
 
 
@@ -174,15 +176,21 @@ class MOCAST_4(nn.Module):
         self.final_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU()
 
-        self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
+        self.final_fc2 = nn.Linear(in_features=256, out_features=(degree * 2 + 1) * self.modes)
 
         if train:
-            t_n = np.array(range(-2, out_frames + 1), dtype=np.float32) / out_frames
             self.sm = None
         else:
-            t_n = np.array(range(1, out_frames + 1), dtype=np.float32) / out_frames
             self.sm = nn.Softmax(dim=1)
-        self.tmat = torch.from_numpy(np.vstack([t_n ** i for i in range(degree, -1, -1)]))
+
+        t_n = np.array(range(-2, out_frames + 1), dtype=np.float32)
+
+        self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(t_n, 1), degree).tensor)[:, 1:].T
+        # self.tmat = torch.from_numpy(np.vstack([t_n ** i for i in range(degree, 0, -1)]))
+        tmat_max, _ = torch.max(self.tmat, dim=1, keepdim=True)
+        tmat_min, _ = torch.min(self.tmat, dim=1, keepdim=True)
+        self.tmat = ((self.tmat - tmat_min) / (tmat_max - tmat_min))
+        self.tmat = self.tmat - self.tmat[:, 2].unsqueeze(1)
 
     def forward(self, x, device, state=None, state_len=None):
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
@@ -191,13 +199,13 @@ class MOCAST_4(nn.Module):
         enc_c_s = nn.init.xavier_normal_(enc_c_s)
 
         state = self.state_fc(state.float())
-        state_len = torch.clamp(state_len, min=1)
+        state_len = torch.clamp(state_len, min=1).type(torch.LongTensor)
 
         state = torch.nn.utils.rnn.pack_padded_sequence(state, state_len.to('cpu'), batch_first=True,
                                                         enforce_sorted=False).float()
         out, _ = self.enc_lstm(state, (enc_h_s, enc_c_s))
         out, _ = torch.nn.utils.rnn.pad_packed_sequence(out, batch_first=True)
-        out = self.enc_lstm_fc(out[torch.arange(out.size(0)), -1, :])
+        out = self.enc_lstm_fc(out[torch.arange(out.size(0)), state_len - 1, :])
 
         out = torch.cat((self.resnet(x), out), dim=1)
 
@@ -209,8 +217,8 @@ class MOCAST_4(nn.Module):
         out = self.final_fc2(out).view(x.size(0), self.modes, -1)
 
         self.tmat = self.tmat.to(device)
-        out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
-        out_y = torch.matmul(out[:, :, self.degree + 1:-1], self.tmat)
+        out_x = torch.matmul(out[:, :, :self.degree], self.tmat)
+        out_y = torch.matmul(out[:, :, self.degree:-1], self.tmat)
 
         if self.sm:
             (_, top_idx) = torch.topk(out[:, :, -1], 10)
@@ -218,7 +226,7 @@ class MOCAST_4(nn.Module):
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             out = torch.gather(out, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out.size(2)))
 
-            return torch.stack((out_x, out_y), dim=3), self.sm(out[:, :, -1])
+            return torch.stack((out_x, out_y), dim=3)[:, :, 3:, :], self.sm(out[:, :, -1])
         else:
             return torch.stack((out_x, out_y), dim=3), out[:, :, -1]
 
