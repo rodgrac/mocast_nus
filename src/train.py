@@ -28,8 +28,8 @@ def forward_mm(data, model, device, criterion):
     inputs = data["image"].to(device)
 
     agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
-    history_window = torch.flip(data["agent_past"][:, :3, :], [1]).to(device)
-    history_mask = torch.flip(data['mask_past'][:, :3], [1]).to(device)
+    history_window = torch.flip(data["agent_past"], [1]).to(device)
+    history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
     targets = data["agent_future"].to(device)
     targets = torch.cat((history_window, targets), dim=1)

@@ -48,7 +48,7 @@ def dump_predictions(pred_out, scores, token, helper):
 
 
 torch.cuda.empty_cache()
-model_path = "../models/MOCAST_4_02_15_2021_03_00_14.pth"
+model_path = "../models/MOCAST_4_02_16_2021_12_13_50.pth"
 ds_type = 'v1.0-trainval'
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -83,7 +83,6 @@ for data in progress_bar:
     #     0, 1, 3, 2).to(device)
     # A = torch.matmul(tmp2, torch.inverse(tmp1[:, :, :, :3]))
     # outputs = torch.matmul(A, tmp1).permute(0, 1, 3, 2)[:, :, 3:, :2]
-
     val_out.extend(outputs.cpu().numpy())
     val_scores.extend(scores.cpu().numpy())
     val_tokens.extend(data["token"])
@@ -97,10 +96,9 @@ for output, score, token in zip(val_out, val_scores, val_tokens):
 json.dump(model_preds, open(os.path.join('../out', 'mocast4_preds.json'), "w"))
 
 '''############################ Quantitative ###########################################'''
-# config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
-# print("[Eval] MOCAST4 metrics")
-# eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
-
+config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
+print("[Eval] MOCAST4 metrics")
+eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
 '''############################ Qualitative ###########################################'''
 for i in range(9, len(val_out), 500):
     img = render_map(pred_helper, val_tokens[i])
