@@ -6,6 +6,7 @@ from orthnet import Legendre, Legendre_Normalized
 from orthnet.backend import NumpyBackend
 import torch.nn.functional as f
 import torch_dct as dct
+import torch.fft
 
 
 class MOCAST_0(nn.Module):
@@ -157,11 +158,13 @@ class MOCAST_3(nn.Module):
 
 # Multimodal Regression | PolyFit
 class MOCAST_4(nn.Module):
-    def __init__(self, in_ch, out_frames, degree, modes, batch_size=32, train=True):
+    def __init__(self, in_ch, out_frames, degree, modes, batch_size=32, train=True, dec='ortho'):
         super().__init__()
         self.batch_size = batch_size
         self.degree = degree
         self.modes = modes
+        self.dec = dec
+        self.basis_norm = False
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
@@ -177,22 +180,29 @@ class MOCAST_4(nn.Module):
         self.final_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU()
 
-        self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
+        self.t_n = np.array(range(-6, out_frames + 1), dtype=np.float32) / out_frames
+        if self.basis_norm:
+            self.t_n *= out_frames
+
+        if self.dec in ['dct', 'fftc']:
+            self.final_fc2 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2 + 1) * self.modes))
+        else:
+            self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
+            if self.dec == 'poly':
+                self.tmat = torch.from_numpy(np.vstack([self.t_n ** i for i in range(degree, -1, -1)]))
+            elif self.dec == 'ortho':
+                self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
 
         if train:
             self.sm = None
         else:
             self.sm = nn.Softmax(dim=1)
 
-        self.t_n = np.array(range(-6, out_frames + 1), dtype=np.float32) / out_frames
-        # self.final_fc2 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2 + 1) * self.modes))
-
-        self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
-        # self.tmat = torch.from_numpy(np.vstack([self.t_n ** i for i in range(degree, -1, -1)]))
-        # tmat_max, _ = torch.max(self.tmat, dim=1, keepdim=True)
-        # tmat_min, _ = torch.min(self.tmat, dim=1, keepdim=True)
-        # self.tmat = ((self.tmat - tmat_min) / (tmat_max - tmat_min))
-        # self.tmat = self.tmat - self.tmat[:, 2].unsqueeze(1)
+        if self.basis_norm:
+            tmat_max, _ = torch.max(self.tmat, dim=1, keepdim=True)
+            tmat_min, _ = torch.min(self.tmat, dim=1, keepdim=True)
+            self.tmat = ((self.tmat - tmat_min) / (tmat_max - tmat_min))
+            self.tmat = self.tmat - self.tmat[:, 2].unsqueeze(1)
 
     def forward(self, x, device, state=None, state_len=None):
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
@@ -220,38 +230,55 @@ class MOCAST_4(nn.Module):
         out = self.final_fc2(out).view(x.size(0), self.modes, -1)
 
         conf = out[:, :, -1]
-
-        self.tmat = self.tmat.to(device)
+        out = out[:, :, :-1]
 
         if self.sm:
-            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
-            out_y = torch.matmul(out[:, :, self.degree + 1:-1], self.tmat[:, 7:])
-            # out_x = dct.idct(out[:, :, :self.t_n.shape[0]])[:, :, 7:]
-            # out_y = dct.idct(out[:, :, self.t_n.shape[0]:-1])[:, :, 7:]
+            if self.dec in ['poly', 'ortho']:
+                self.tmat = self.tmat.to(device)
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
+            elif self.dec == 'dct':
+                out_x = dct.idct(out[:, :, :self.t_n.shape[0]])[:, :, 7:]
+                out_y = dct.idct(out[:, :, self.t_n.shape[0]:])[:, :, 7:]
+            elif self.dec == 'fftc':
+                out = out.view(x.size(0), self.modes, -1, 2)
+                out = torch.ifft(out, 1, normalized=True)[:, :, 7:, :]
+                out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
+                out = out.view(x.size(0), self.modes, -1)
 
             (_, top_idx) = torch.topk(conf, 10)
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
             out = torch.gather(out, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out.size(2)))
-            return torch.stack((out_x, out_y), dim=3), self.sm(conf), out[:, :, :-1]
+            return torch.stack((out_x, out_y), dim=3), self.sm(conf), out
         else:
-            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
-            out_y = torch.matmul(out[:, :, self.degree + 1:-1], self.tmat)
-            return torch.stack((out_x, out_y), dim=3), conf
+            if self.dec in ['poly', 'ortho']:
+                self.tmat = self.tmat.to(device)
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
+                out = torch.stack((out_x, out_y), dim=3)
+            elif self.dec == 'dct':
+                out_x = dct.idct(out[:, :, :self.t_n.shape[0]])
+                out_y = dct.idct(out[:, :, self.t_n.shape[0]:])
+                out = torch.stack((out_x, out_y), dim=3)
+            elif self.dec == 'fftc':
+                out = out.view(x.size(0), self.modes, -1, 2)
+                out = torch.ifft(out, 1, normalized=True)
+            return out, conf
 
     def test_opt(self, coeffs, hist=True):
+        if self.dec in ['dct', 'fftc']:
+            print("Test time opt not supported. Skipping...")
+            return None
         if hist:
-            hist_pred_x = torch.matmul(coeffs[:, :, :self.degree + 1], self.tmat[:, :7]).requires_grad_(True)
-            hist_pred_y = torch.matmul(coeffs[:, :, self.degree + 1:], self.tmat[:, :7]).requires_grad_(True)
-            # hist_pred_x = dct.idct(coeffs[:, :, :self.t_n.shape[0]]).requires_grad_(True)[:, :, :7]
-            # hist_pred_y = dct.idct(coeffs[:, :, self.t_n.shape[0]:]).requires_grad_(True)[:, :, :7]
+            pred_x = torch.matmul(coeffs[:, :, :self.degree + 1], self.tmat[:, :7]).requires_grad_(True)
+            pred_y = torch.matmul(coeffs[:, :, self.degree + 1:], self.tmat[:, :7]).requires_grad_(True)
         else:
-            hist_pred_x = torch.matmul(coeffs[:, :, :self.degree + 1], self.tmat[:, 7:]).requires_grad_(False)
-            hist_pred_y = torch.matmul(coeffs[:, :, self.degree + 1:], self.tmat[:, 7:]).requires_grad_(False)
-            # hist_pred_x = dct.idct(coeffs[:, :, :self.t_n.shape[0]]).requires_grad_(False)[:, :, 7:]
-            # hist_pred_y = dct.idct(coeffs[:, :, self.t_n.shape[0]:]).requires_grad_(False)[:, :, 7:]
-        return torch.stack((hist_pred_x, hist_pred_y), dim=3)
+            pred_x = torch.matmul(coeffs[:, :, :self.degree + 1], self.tmat[:, 7:]).requires_grad_(False)
+            pred_y = torch.matmul(coeffs[:, :, self.degree + 1:], self.tmat[:, 7:]).requires_grad_(False)
+
+        return torch.stack((pred_x, pred_y), dim=3)
 
 
 # Multimodal Regression | DecLSTM | PolyFit

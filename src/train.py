@@ -96,7 +96,7 @@ train_dl = DataLoader(train_ds, shuffle=True, batch_size=16, num_workers=16)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST_4(3, 12, 5, 10, 16).to(device)
+model = MOCAST_4(3, 12, 5, 10, 16, dec='fftc').to(device)
 
 criterion_reg = nn.MSELoss(reduction="none")
 criterion_cls = nn.CrossEntropyLoss()

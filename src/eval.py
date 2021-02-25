@@ -66,7 +66,7 @@ def test_time_opt(data, coeffs, device):
             coeffs_ -= coeffs_.grad
 
         coeffs_.grad.zero_()
-    # print(losses)
+    print(losses)
     return coeffs_.detach()
 
 
@@ -81,8 +81,8 @@ def dump_predictions(pred_out, scores, token, helper):
 
 
 torch.cuda.empty_cache()
-model_path = "../models/MOCAST_4_02_16_2021_04_31_20.pth"
-ds_type = 'v1.0-mini'
+model_path = "../models/MOCAST_4_02_25_2021_14_22_03.pth"
+ds_type = 'v1.0-trainval'
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                             std=[0.229, 0.224, 0.225])])
@@ -96,7 +96,7 @@ val_dl = DataLoader(val_ds, shuffle=False, batch_size=16, num_workers=16)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST_4(3, 12, 5, 10, 16, train=False).to(device)
+model = MOCAST_4(3, 12, 5, 10, 16, train=False, dec='fftc').to(device)
 
 print("Loading model ", model_path)
 model.load_state_dict(torch.load(model_path))
@@ -110,7 +110,7 @@ val_tokens = []
 progress_bar = tqdm(val_dl)
 for data in progress_bar:
 
-    outputs, scores = forward_mm(data, model, device, test_opt=True)
+    outputs, scores = forward_mm(data, model, device, test_opt=False)
 
     val_out.extend(outputs.cpu().numpy())
     val_scores.extend(scores.cpu().numpy())
@@ -128,7 +128,6 @@ json.dump(model_preds, open(os.path.join('../out', 'mocast4_preds.json'), "w"))
 config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
 print("[Eval] MOCAST4 metrics")
 eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
-exit()
 '''############################ Qualitative ###########################################'''
 for i in range(9, len(val_out), 500):
     img = render_map(pred_helper, val_tokens[i])
