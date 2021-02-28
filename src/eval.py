@@ -81,7 +81,7 @@ def dump_predictions(pred_out, scores, token, helper):
 
 
 torch.cuda.empty_cache()
-model_path = "../models/MOCAST_4_02_27_2021_17_41_00.pth"
+model_path = "../models/MOCAST_4_02_28_2021_14_04_55.pth"
 ds_type = 'v1.0-trainval'
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
