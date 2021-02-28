@@ -81,7 +81,7 @@ def dump_predictions(pred_out, scores, token, helper):
 
 
 torch.cuda.empty_cache()
-model_path = "../models/MOCAST_4_02_25_2021_14_22_03.pth"
+model_path = "../models/MOCAST_4_02_27_2021_17_41_00.pth"
 ds_type = 'v1.0-trainval'
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -96,7 +96,7 @@ val_dl = DataLoader(val_ds, shuffle=False, batch_size=16, num_workers=16)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST_4(3, 12, 5, 10, 16, train=False, dec='fftc').to(device)
+model = MOCAST_4(3, 12, 5, 10, 16, train=False, dec='polytr').to(device)
 
 print("Loading model ", model_path)
 model.load_state_dict(torch.load(model_path))
@@ -129,7 +129,8 @@ config = load_prediction_config(pred_helper, '../config/eval_metric_config.json'
 print("[Eval] MOCAST4 metrics")
 eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
 '''############################ Qualitative ###########################################'''
-for i in range(9, len(val_out), 500):
+
+for i in np.random.randint(0, len(val_out), 10):
     img = render_map(pred_helper, val_tokens[i])
     gt_cord = render_trajectories(pred_helper, val_tokens[i])
     fig, ax = plt.subplots(1, 1)

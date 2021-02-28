@@ -180,12 +180,17 @@ class MOCAST_4(nn.Module):
         self.final_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU()
 
-        self.t_n = np.array(range(-6, out_frames + 1), dtype=np.float32) / out_frames
-        if self.basis_norm:
-            self.t_n *= out_frames
+        self.t_n = np.arange(-3, out_frames / 2 + 0.001, 0.5, dtype=np.float32)
+
+        # if not (self.basis_norm or self.dec == 'polytr'):
+        self.t_n = self.t_n / self.t_n[-1]
 
         if self.dec in ['dct', 'fftc']:
             self.final_fc2 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2 + 1) * self.modes))
+        elif self.dec == 'polytr':
+            self.t_n = torch.from_numpy(self.t_n)
+            self.t_n = self.t_n.unsqueeze(0).unsqueeze(0).repeat(batch_size, self.modes, 1)
+            self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 2) * self.modes)
         else:
             self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
             if self.dec == 'poly':
@@ -230,13 +235,20 @@ class MOCAST_4(nn.Module):
         out = self.final_fc2(out).view(x.size(0), self.modes, -1)
 
         conf = out[:, :, -1]
-        out = out[:, :, :-1]
+        if self.dec == 'polytr':
+            eval_pt = out[:, :, -2]
+        out = out[:, :, :(self.degree + 1) * 2]
 
         if self.sm:
             if self.dec in ['poly', 'ortho']:
                 self.tmat = self.tmat.to(device)
                 out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
                 out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
+            elif self.dec == 'polytr':
+                t_n_offset = self.t_n[:x.size(0)].to(device) - eval_pt.unsqueeze(-1)
+                self.tmat = torch.stack([t_n_offset ** i for i in range(self.degree, -1, -1)], dim=2)
+                out_x = torch.einsum('bmd,bmds->bms', out[:, :, :self.degree + 1], self.tmat[:, :, :, 7:])
+                out_y = torch.einsum('bmd,bmds->bms', out[:, :, self.degree + 1:], self.tmat[:, :, :, 7:])
             elif self.dec == 'dct':
                 out_x = dct.idct(out[:, :, :self.t_n.shape[0]])[:, :, 7:]
                 out_y = dct.idct(out[:, :, self.t_n.shape[0]:])[:, :, 7:]
@@ -257,6 +269,12 @@ class MOCAST_4(nn.Module):
                 self.tmat = self.tmat.to(device)
                 out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
                 out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
+                out = torch.stack((out_x, out_y), dim=3)
+            elif self.dec == 'polytr':
+                t_n_offset = self.t_n[:x.size(0)].to(device) - eval_pt.unsqueeze(-1)
+                self.tmat = torch.stack([t_n_offset ** i for i in range(self.degree, -1, -1)], dim=2)
+                out_x = torch.einsum('bmd,bmds->bms', out[:, :, :self.degree + 1], self.tmat)
+                out_y = torch.einsum('bmd,bmds->bms', out[:, :, self.degree + 1:], self.tmat)
                 out = torch.stack((out_x, out_y), dim=3)
             elif self.dec == 'dct':
                 out_x = dct.idct(out[:, :, :self.t_n.shape[0]])
