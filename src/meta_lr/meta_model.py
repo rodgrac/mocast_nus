@@ -2,7 +2,7 @@ from torchvision.models.resnet import resnet50
 import torch
 from torch import nn, optim
 import numpy as np
-from orthnet import Legendre, Legendre_Normalized
+from orthnet import Legendre_Normalized
 from orthnet.backend import NumpyBackend
 import torch.nn.functional as f
 import torch_dct as dct
@@ -23,6 +23,7 @@ class MOCAST4_METALR(nn.Module):
 
         print("Num modes: ", self.modes)
 
+        # Agent state embedding (x, y, vel, acc, yawr)
         self.state_fc = nn.Linear(in_features=5, out_features=64)
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
 
@@ -38,6 +39,7 @@ class MOCAST4_METALR(nn.Module):
 
         self.final_fc3 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
 
+        # Legendre Orthogonal basis matrix
         self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
 
         if train:
@@ -53,6 +55,7 @@ class MOCAST4_METALR(nn.Module):
             enc_h_s = nn.init.xavier_normal_(enc_h_s)
             enc_c_s = nn.init.xavier_normal_(enc_c_s)
 
+        # Variable length state LSTM
         state = self.state_fc(state.float())
         state_len = torch.clamp(state_len, min=1).type(torch.LongTensor)
 
@@ -63,9 +66,8 @@ class MOCAST4_METALR(nn.Module):
         out, _ = torch.nn.utils.rnn.pad_packed_sequence(out, batch_first=True)
         out = self.enc_lstm_fc(out[torch.arange(out.size(0)), state_len - 1, :])
 
+        # Concatenate state encoding with resnet encoding
         out = torch.cat((self.resnet(x), out), dim=1)
-
-        # out = torch.cat(self.modes * [out], dim=1).view(-1, self.modes, 128)
 
         out = self.final_fc1(out)
         out = self.l_relu(out)
@@ -73,7 +75,8 @@ class MOCAST4_METALR(nn.Module):
         out = self.final_fc2(out)
         out = self.l_relu(out)
 
-        out = self.final_fc3(out).view(x.size(0), self.modes, -1)
+        out = self.final_fc3(out)
+        out = out.view(x.size(0), self.modes, -1)
 
         conf = out[:, :, -1]
         out = out[:, :, :(self.degree + 1) * 2]
@@ -86,11 +89,14 @@ class MOCAST4_METALR(nn.Module):
             out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
 
         if self.sm:
+            # Testing
+            # Pick top N modes
             (_, top_idx) = torch.topk(conf, 10)
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
             return torch.stack((out_x, out_y), dim=3), self.sm(conf)
         else:
+            # Training
             return torch.stack((out_x, out_y), dim=3), conf
 
