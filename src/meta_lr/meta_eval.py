@@ -37,7 +37,7 @@ def clone_model_param(model):
 
 def update_param_data(model, new_params):
     for name, params in model.named_parameters():
-        params.data.copy_(new_params[name])
+        params.copy_(new_params[name])
 
 
 def find_closest_traj(pred, gt):
@@ -57,7 +57,7 @@ def forward_mm(data, model, device, criterion):
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
     # Inner Loop
-    for l in range(10):
+    for l in range(5):
         outputs_h, scores_h = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
         labels_h = find_closest_traj(outputs_h.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
         loss_reg_h = criterion[0](outputs_h[torch.arange(outputs_h.size(0)), labels_h, :, :], history_window)
@@ -67,10 +67,10 @@ def forward_mm(data, model, device, criterion):
         loss_h = loss_h * torch.unsqueeze(history_mask, 2)
         loss_h = loss_h.mean()
 
-        grads = torch.autograd.grad(loss_h, model.parameters(), create_graph=True)
+        grads = torch.autograd.grad(loss_h, model.final_fc3.parameters(), create_graph=True)
 
         with torch.no_grad():
-            for i, p in enumerate(model.parameters()):
+            for i, p in enumerate(model.final_fc3.parameters()):
                 new_p = p - 3e-4 * grads[i]
                 p.copy_(new_p)
         print('Inner loop Loss: {:.4f}'.format(loss_h))
@@ -93,6 +93,12 @@ def dump_predictions(pred_out, scores, token, helper):
 torch.cuda.empty_cache()
 model_path = "../../models/DataParallel_03_01_2021_17_56_30.pth"
 ds_type = 'v1.0-trainval'
+#ds_type = 'v1.0-mini'
+
+in_ch = 3
+out_pts = 12
+poly_deg = 5
+num_modes = 10
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                             std=[0.229, 0.224, 0.225])])
@@ -106,11 +112,11 @@ val_dl = DataLoader(val_ds, shuffle=True, batch_size=8, num_workers=8, drop_last
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST4_METALR(3, 12, 5, 10, train=False).to(device)
+model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes, train=False).to(device)
 
-if torch.cuda.device_count() > 1:
-    # print("Using", torch.cuda.device_count(), "GPUs!")
-    model = nn.DataParallel(model, device_ids=[0, 1])
+# if torch.cuda.device_count() > 1:
+#     # print("Using", torch.cuda.device_count(), "GPUs!")
+#     model = nn.DataParallel(model, device_ids=[0, 1])
 
 print("Loading model ", model_path)
 model.load_state_dict(torch.load(model_path))
