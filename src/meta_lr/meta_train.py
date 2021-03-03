@@ -24,9 +24,19 @@ def clone_model_param(model):
 
     return new_param
 
-def update_param_data(model, new_params):
+
+def reset_param_data(model, new_params):
     for name, params in model.named_parameters():
         params.data.copy_(new_params[name])
+
+
+def get_batch_sample(data, ind):
+    sample = {}
+    for k, v in data.items():
+        sample[k] = v[ind]
+        if k != 'token':
+            sample[k] = sample.get(k).unsqueeze(0)
+    return sample
 
 
 def find_closest_traj(pred, gt):
@@ -47,14 +57,14 @@ def forward_mm(data, model, device, criterion):
     targets = data["agent_future"].to(device)
     target_mask = data['mask_future'].to(device)
 
-    # Inner Loop
-    for l in range(10):
+    # Inner GD Loop
+    for l in range(5):
         outputs_h, scores_h = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
         labels_h = find_closest_traj(outputs_h.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
         loss_reg_h = criterion[0](outputs_h[torch.arange(outputs_h.size(0)), labels_h, :, :], history_window)
         loss_cls_h = criterion[1](scores_h, labels_h)
         loss_h = loss_reg_h + loss_cls_h
-        # not all the output steps are valid, but we can filter them out from the loss using availabilities
+        # not all the output steps are valid, so apply mask to ignore invalid ones
         loss_h = loss_h * torch.unsqueeze(history_mask, 2)
         loss_h = loss_h.mean()
 
@@ -62,7 +72,7 @@ def forward_mm(data, model, device, criterion):
 
         with torch.no_grad():
             for i, p in enumerate(model.parameters()):
-                new_p = p - 3e-4 * grads[i]
+                new_p = p - 5e-4 * grads[i]
                 p.copy_(new_p)
         print('Inner loop Loss: {:.4f}'.format(loss_h))
 
@@ -74,45 +84,61 @@ def forward_mm(data, model, device, criterion):
     # not all the output steps are valid, but we can filter them out from the loss using availabilities
     loss = loss * torch.unsqueeze(target_mask, 2)
     loss = loss.mean()
-    return loss, outputs
+    return loss
 
 
 def train(model, train_ds, device, criterion):
     # ==== TRAIN LOOP
     epochs = 10000
-    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
+    batch_size = 8
+    optimizer = torch.optim.SGD(model.parameters(), 1e-4)
+    # torch.autograd.set_detect_anomaly(True)
 
     sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
                                                 steps_per_epoch=1)
 
-    train_dl = DataLoader(train_ds, shuffle=True, batch_size=4, num_workers=4)
+    train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size)
     tr_it = iter(train_dl)
 
     epoch_mean_loss = []
+    # Outer loop
     for epoch in range(epochs):
         try:
             data = next(tr_it)
         except StopIteration:
-            train_dl = DataLoader(train_ds, shuffle=True, batch_size=4, num_workers=4)
+            train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size)
             tr_it = iter(train_dl)
             data = next(tr_it)
 
         model.train()
         torch.set_grad_enabled(True)
 
-        optimizer.zero_grad()
+        batch_loss = []
 
-        # init_params = clone_model_param(model)
+        # Inner loop
+        for b in range(len(data['token'])):
+            print("Sample {}:".format(b))
+            with torch.no_grad():
+                sample = get_batch_sample(data, b)
+                # Keep a copy of the original model params theta
+                init_params = clone_model_param(model)
 
-        with torch.enable_grad():
-            loss, _ = forward_mm(data, model, device, criterion)
+            optimizer.zero_grad()
 
-        # update_param_data(model, init_params)
+            with torch.enable_grad():
+                # Gradient descent on history and evaluated on future to get updated params phi
+                batch_loss.append(forward_mm(sample, model, device, criterion))
 
+            with torch.no_grad():
+                # Reset model params to initial theta
+                reset_param_data(model, init_params)
+
+        # Sum all the losses
+        loss = torch.sum(torch.tensor(batch_loss, requires_grad=True))
         # Backward pass
         loss.backward()
 
-        # nn.utils.clip_grad_value_(model.parameters(), 0.1)
+        nn.utils.clip_grad_value_(model.parameters(), 0.5)
 
         optimizer.step()
         sched.step()
@@ -133,12 +159,11 @@ train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST4_METALR(3, 12, 5, 10, 16).to(device)
+model = MOCAST4_METALR(3, 12, 5, 10).to(device)
 
 # if torch.cuda.device_count() > 1:
 #     # print("Using", torch.cuda.device_count(), "GPUs!")
-#     model = nn.DataParallel(model)
-
+#     model = nn.DataParallel(model, device_ids=[0, 1])
 
 criterion_reg = nn.MSELoss(reduction="none")
 criterion_cls = nn.CrossEntropyLoss()
