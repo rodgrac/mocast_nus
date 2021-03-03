@@ -38,6 +38,7 @@ def get_batch_sample(data, ind):
             sample[k] = sample.get(k).unsqueeze(0)
     return sample
 
+
 # Returns closest mode to GT
 def find_closest_traj(pred, gt):
     gt = np.expand_dims(gt, 1)
@@ -164,13 +165,17 @@ in_ch = 3
 out_pts = 12
 poly_deg = 5
 num_modes = 10
+model_out_dir = '../../models/'
+
+if not os.path.exists(model_out_dir):
+    os.makedirs(model_out_dir)
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                             std=[0.229, 0.224, 0.225])])
 
 train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes).to(device)
 
@@ -185,8 +190,8 @@ criterion_cls = nn.CrossEntropyLoss()
 losses_train = train(model, train_ds, device, [criterion_reg, criterion_cls])
 
 time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
-torch.save(model.state_dict(), '../../models/' + model.__class__.__name__ + time_string + '.pth')
-print("Saved model as ../../models/" + model.__class__.__name__ + time_string + '.pth')
+torch.save(model.state_dict(), model_out_dir + model.__class__.__name__ + time_string + '.pth')
+print("Saved model as " + model_out_dir + model.__class__.__name__ + time_string + '.pth')
 
 train_ds.close_hf()
 
