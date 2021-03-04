@@ -78,11 +78,11 @@ def forward_mm(data, model, device, criterion):
         print('Inner loop Loss: {:.4f}'.format(loss_h))
 
         # Gradients wrt model params
-        grads = torch.autograd.grad(loss_h, model.final_fc3.parameters(), create_graph=True)
+        grads = torch.autograd.grad(loss_h, model.parameters(), create_graph=True)
 
         with torch.no_grad():
-            for i, p in enumerate(model.final_fc3.parameters()):
-                new_p = p - 5e-4 * grads[i]
+            for i, p in enumerate(model.parameters()):
+                new_p = p - 1e-4 * grads[i]
                 p.copy_(new_p)
 
     # Evaluate loss on targets
@@ -125,13 +125,13 @@ def train(model, train_ds, device, criterion):
 
         batch_loss = []
 
+        # Keep a copy of the initial model params 'theta'
+        init_params = clone_model_param(model)
+
         # Inner loop
         for b in range(len(data['token'])):
             print("Sample {}:".format(b))
-            with torch.no_grad():
-                sample = get_batch_sample(data, b)
-                # Keep a copy of the original model params theta
-                init_params = clone_model_param(model.final_fc3)
+            sample = get_batch_sample(data, b)
 
             optimizer.zero_grad()
 
@@ -140,11 +140,14 @@ def train(model, train_ds, device, criterion):
                 batch_loss.append(forward_mm(sample, model, device, criterion))
 
             with torch.no_grad():
-                # Reset model params to initial theta
-                reset_param_data(model.final_fc3, init_params)
+                # Reset model params to initial 'theta'
+                reset_param_data(model, init_params)
 
-        # Sum all the losses
+        # Sum all the losses 
         loss = torch.sum(torch.tensor(batch_loss, requires_grad=True))
+
+        optimizer.zero_grad()
+
         # Backward pass
         loss.backward()
 
