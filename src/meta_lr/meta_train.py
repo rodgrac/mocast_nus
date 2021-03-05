@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 import torch.nn as nn
 import matplotlib.pyplot as plt
+from utils import dump_model_graph
 
 from meta_lr.meta_model import MOCAST4_METALR
 from nusc_dataloader import NuScenes_HDF
@@ -27,7 +28,7 @@ def clone_model_param(model):
 
 def reset_param_data(model, new_params):
     for name, params in model.named_parameters():
-        params.copy_(new_params[name])
+        params.data.copy_(new_params[name])
 
 
 def get_batch_sample(data, ind):
@@ -66,24 +67,24 @@ def forward_mm(data, model, device, criterion):
     # Inner GD Loop
     for l in range(5):
         # Train loss on history
-        outputs_h, scores_h = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
-        labels_h = find_closest_traj(outputs_h.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
+        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
+        labels_h = find_closest_traj(outputs.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
         # Regression + Classification loss
-        loss_reg_h = criterion[0](outputs_h[torch.arange(outputs_h.size(0)), labels_h, :, :], history_window)
-        loss_cls_h = criterion[1](scores_h, labels_h)
-        loss_h = loss_reg_h + loss_cls_h
+        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels_h, :, :], history_window)
+        loss_cls = criterion[1](scores, labels_h)
+        loss = loss_reg + loss_cls
         # not all the output steps are valid, so apply mask to ignore invalid ones
-        loss_h = loss_h * torch.unsqueeze(history_mask, 2)
-        loss_h = loss_h.mean()
-        print('Inner loop Loss: {:.4f}'.format(loss_h))
+        loss = loss * torch.unsqueeze(history_mask, 2)
+        loss = loss.mean()
+        print('Inner loop Loss: {:.4f}'.format(loss))
 
         # Gradients wrt model params
-        grads = torch.autograd.grad(loss_h, model.parameters(), create_graph=True)
+        grads = torch.autograd.grad(loss, model.final_fc3.parameters(), create_graph=True)
 
         with torch.no_grad():
-            for i, p in enumerate(model.parameters()):
-                new_p = p - 1e-4 * grads[i]
-                p.copy_(new_p)
+            for i, p in enumerate(model.final_fc3.parameters()):
+                new_p = p - 5e-4 * grads[i]
+                p.data.copy_(new_p)
 
     # Evaluate loss on targets
     outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
@@ -104,8 +105,8 @@ def train(model, train_ds, device, criterion):
     optimizer = torch.optim.SGD(model.parameters(), 1e-4)
     # torch.autograd.set_detect_anomaly(True)
 
-    # sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
-    #                                             steps_per_epoch=1)
+    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
+                                                steps_per_epoch=1)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size)
     tr_it = iter(train_dl)
@@ -126,7 +127,7 @@ def train(model, train_ds, device, criterion):
         batch_loss = []
 
         # Keep a copy of the initial model params 'theta'
-        init_params = clone_model_param(model)
+        init_params = clone_model_param(model.final_fc3)
 
         # Inner loop
         for b in range(len(data['token'])):
@@ -141,20 +142,21 @@ def train(model, train_ds, device, criterion):
 
             with torch.no_grad():
                 # Reset model params to initial 'theta'
-                reset_param_data(model, init_params)
+                reset_param_data(model.final_fc3, init_params)
 
         # Sum all the losses 
-        loss = torch.sum(torch.tensor(batch_loss, requires_grad=True))
+        loss = sum(batch_loss)
+
+        # dump_model_graph(loss, model)
 
         optimizer.zero_grad()
-
         # Backward pass
         loss.backward()
 
-        nn.utils.clip_grad_value_(model.parameters(), 0.5)
+        # nn.utils.clip_grad_value_(model.parameters(), 0.5)
         # Update theta
         optimizer.step()
-        # sched.step()
+        sched.step()
 
         epoch_mean_loss.append(loss.cpu().detach().item())
         print("Epoch: {}/{} Outer loss: {} loss(avg): {}".format(epoch + 1, epochs, loss.cpu().detach().item(),

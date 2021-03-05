@@ -76,10 +76,10 @@ class MOCAST4_METALR(nn.Module):
         out = self.l_relu(out)
 
         out = self.final_fc3(out)
-        out = out.view(x.size(0), self.modes, -1)
+        out = out.view(x.size(0), self.modes, -1).clone()
 
         conf = out[:, :, -1]
-        out = out[:, :, :(self.degree + 1) * 2]
+        out = out[:, :, :(self.degree + 1) * 2].clone()
 
         if hist:
             out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])

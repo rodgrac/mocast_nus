@@ -3,6 +3,7 @@ import sys
 import yaml
 import pickle
 import json
+from torchviz import make_dot
 
 sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
 from nuscenes.eval.prediction.compute_metrics import compute_metrics
@@ -28,6 +29,14 @@ def pickle_save_obj(data, path):
 def pickle_load_obj(path):
     with open(path, 'rb') as f:
         return pickle.load(f)
+
+def dump_model_graph(variable, model):
+    dot = make_dot(variable, params=dict(model.named_parameters()))
+    dot.format = 'png'
+    #time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
+    #dot.render(model.__class__.__name__ + '_' + time_string)
+    dot.render('torchviz')
+
 
 
 def eval_metrics(pred_file, helper, config, out_file):
