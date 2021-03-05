@@ -37,7 +37,7 @@ def clone_model_param(model):
 
 def update_param_data(model, new_params):
     for name, params in model.named_parameters():
-        params.copy_(new_params[name])
+        params.data.copy_(new_params[name])
 
 
 def find_closest_traj(pred, gt):
@@ -57,23 +57,23 @@ def forward_mm(data, model, device, criterion):
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
     # Inner Loop
-    for l in range(5):
-        outputs_h, scores_h = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
-        labels_h = find_closest_traj(outputs_h.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
-        loss_reg_h = criterion[0](outputs_h[torch.arange(outputs_h.size(0)), labels_h, :, :], history_window)
-        loss_cls_h = criterion[1](scores_h, labels_h)
-        loss_h = loss_reg_h + loss_cls_h
+    for l in range(1):
+        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
+        labels_h = find_closest_traj(outputs.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
+        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels_h, :, :], history_window)
+        loss_cls = criterion[1](scores, labels_h)
+        loss = loss_reg + loss_cls
         # not all the output steps are valid, but we can filter them out from the loss using availabilities
-        loss_h = loss_h * torch.unsqueeze(history_mask, 2)
-        loss_h = loss_h.mean()
+        loss = loss * torch.unsqueeze(history_mask, 2)
+        loss = loss.mean()
 
-        grads = torch.autograd.grad(loss_h, model.final_fc3.parameters(), create_graph=True)
+        grads = torch.autograd.grad(loss, model.final_fc3.parameters(), create_graph=True)
 
         with torch.no_grad():
             for i, p in enumerate(model.final_fc3.parameters()):
-                new_p = p - 3e-4 * grads[i]
-                p.copy_(new_p)
-        print('Inner loop Loss: {:.4f}'.format(loss_h))
+                new_p = p - 5e-4 * grads[i]
+                p.data.copy_(new_p)
+        print('Inner loop Loss: {:.4f}'.format(loss))
 
     outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
 
@@ -91,7 +91,7 @@ def dump_predictions(pred_out, scores, token, helper):
 
 
 torch.cuda.empty_cache()
-model_path = "../../models/DataParallel_03_01_2021_17_56_30.pth"
+model_path = "../../models/MOCAST4_METALR_03_04_2021_20_54_34.pth"
 ds_type = 'v1.0-trainval'
 #ds_type = 'v1.0-mini'
 
@@ -108,11 +108,13 @@ val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-' + 
 nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
 pred_helper = PredictHelper(nuscenes)
 
-val_dl = DataLoader(val_ds, shuffle=True, batch_size=8, num_workers=8, drop_last=True)
+val_dl = DataLoader(val_ds, shuffle=False, batch_size=1)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes, train=False).to(device)
+
+optimizer = torch.optim.SGD(model.parameters(), 1e-4)
 
 # if torch.cuda.device_count() > 1:
 #     # print("Using", torch.cuda.device_count(), "GPUs!")
@@ -132,13 +134,14 @@ val_scores = []
 val_tokens = []
 progress_bar = tqdm(val_dl)
 
-org_params = clone_model_param(model)
+org_params = clone_model_param(model.final_fc3)
 for data in progress_bar:
     with torch.enable_grad():
+        optimizer.zero_grad()
         outputs, scores = forward_mm(data, model, device, [criterion_reg, criterion_cls])
 
     model.eval()
-    update_param_data(model, org_params)
+    update_param_data(model.final_fc3, org_params)
 
     val_out.extend(outputs.cpu().numpy())
     val_scores.extend(scores.cpu().numpy())
@@ -158,7 +161,7 @@ print("[Eval] MOCAST4 metrics")
 eval_metrics('../../out/mocast4_preds.json', pred_helper, config, '../../out/mocast4_metrics.json')
 
 '''############################ Qualitative ###########################################'''
-for i in np.random.randint(0, len(val_out), 25):
+for i in np.random.randint(0, len(val_out), 20):
     img = render_map(pred_helper, val_tokens[i])
     gt_cord = render_trajectories(pred_helper, val_tokens[i])
     fig, ax = plt.subplots(1, 1)

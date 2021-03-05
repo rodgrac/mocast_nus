@@ -3,6 +3,8 @@ import sys
 import yaml
 import pickle
 import json
+import time
+import torch
 from torchviz import make_dot
 
 sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
@@ -38,11 +40,17 @@ def dump_model_graph(variable, model):
     dot.render('torchviz')
 
 
-
 def eval_metrics(pred_file, helper, config, out_file):
     predictions = json.load(open(pred_file, "r"))
     results = compute_metrics(predictions, helper, config)
     json.dump(results, open(out_file, "w"), indent=2)
     print(json.dumps(results, indent=4, sort_keys=True))
+
+
+def save_model_dict(model, out_dir, epoch):
+    time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
+    out_file = os.path.join(out_dir, 'Epoch_' + str(epoch) + time_string + '.pth')
+    torch.save(model.state_dict(), out_file)
+    print("Saved model as " + out_file)
 
 

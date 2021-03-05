@@ -2,6 +2,7 @@ import os
 import sys
 import torch
 import time
+import cv2
 import random
 import numpy as np
 from tqdm import tqdm
@@ -10,6 +11,7 @@ from torchvision import transforms
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from utils import dump_model_graph
+from utils import save_model_dict
 
 from meta_lr.meta_model import MOCAST4_METALR
 from nusc_dataloader import NuScenes_HDF
@@ -79,11 +81,11 @@ def forward_mm(data, model, device, criterion):
         print('Inner loop Loss: {:.4f}'.format(loss))
 
         # Gradients wrt model params
-        grads = torch.autograd.grad(loss, model.final_fc3.parameters(), create_graph=True)
+        grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
 
         with torch.no_grad():
-            for i, p in enumerate(model.final_fc3.parameters()):
-                new_p = p - 5e-4 * grads[i]
+            for i, p in enumerate(model.parameters()):
+                new_p = p - 5e-5 * grads[i]
                 p.data.copy_(new_p)
 
     # Evaluate loss on targets
@@ -98,15 +100,15 @@ def forward_mm(data, model, device, criterion):
     return loss
 
 
-def train(model, train_ds, device, criterion):
+def train(model, train_ds, device, criterion, model_out_dir_):
     # ==== TRAIN LOOP
     epochs = 10000
     batch_size = 8
     optimizer = torch.optim.SGD(model.parameters(), 1e-4)
     # torch.autograd.set_detect_anomaly(True)
 
-    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
-                                                steps_per_epoch=1)
+    # sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
+    #                                             steps_per_epoch=1)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size)
     tr_it = iter(train_dl)
@@ -125,9 +127,8 @@ def train(model, train_ds, device, criterion):
         torch.set_grad_enabled(True)
 
         batch_loss = []
-
         # Keep a copy of the initial model params 'theta'
-        init_params = clone_model_param(model.final_fc3)
+        init_params = clone_model_param(model)
 
         # Inner loop
         for b in range(len(data['token'])):
@@ -142,13 +143,12 @@ def train(model, train_ds, device, criterion):
 
             with torch.no_grad():
                 # Reset model params to initial 'theta'
-                reset_param_data(model.final_fc3, init_params)
+                reset_param_data(model, init_params)
 
         # Sum all the losses 
         loss = sum(batch_loss)
 
         # dump_model_graph(loss, model)
-
         optimizer.zero_grad()
         # Backward pass
         loss.backward()
@@ -156,50 +156,54 @@ def train(model, train_ds, device, criterion):
         # nn.utils.clip_grad_value_(model.parameters(), 0.5)
         # Update theta
         optimizer.step()
-        sched.step()
+        # sched.step()
 
         epoch_mean_loss.append(loss.cpu().detach().item())
         print("Epoch: {}/{} Outer loss: {} loss(avg): {}".format(epoch + 1, epochs, loss.cpu().detach().item(),
                                                                  np.mean(epoch_mean_loss)))
 
+        if (epoch + 1) % 1000 == 0:
+            save_model_dict(model, model_out_dir_, epoch + 1)
+
     return epoch_mean_loss
 
 
-torch.cuda.empty_cache()
-in_ch = 3
-out_pts = 12
-poly_deg = 5
-num_modes = 10
-model_out_dir = '../../models/'
+if __name__ == '__main__':
+    torch.cuda.empty_cache()
+    in_ch = 3
+    out_pts = 12
+    poly_deg = 5
+    num_modes = 10
+    model_out_dir_root = '/scratch/rodney/models/nuScenes'
 
-if not os.path.exists(model_out_dir):
-    os.makedirs(model_out_dir)
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                                                std=[0.229, 0.224, 0.225])])
 
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                            std=[0.229, 0.224, 0.225])])
+    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
 
-train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
+    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes).to(device)
 
-model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes).to(device)
+    model_out_dir = os.path.join(model_out_dir_root,
+                                 model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
+    # Create model out directory
+    if not os.path.exists(model_out_dir):
+        os.makedirs(model_out_dir)
 
-# if torch.cuda.device_count() > 1:
-#     # print("Using", torch.cuda.device_count(), "GPUs!")
-#     model = nn.DataParallel(model, device_ids=[0, 1])
+    # if torch.cuda.device_count() > 1:
+    #     # print("Using", torch.cuda.device_count(), "GPUs!")
+    #     model = nn.DataParallel(model, device_ids=[0, 1])
 
-criterion_reg = nn.MSELoss(reduction="none")
-criterion_cls = nn.CrossEntropyLoss()
+    criterion_reg = nn.MSELoss(reduction="none")
+    criterion_cls = nn.CrossEntropyLoss()
 
-# Training
-losses_train = train(model, train_ds, device, [criterion_reg, criterion_cls])
+    # Training
+    losses_train = train(model, train_ds, device, [criterion_reg, criterion_cls], model_out_dir)
 
-time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
-torch.save(model.state_dict(), model_out_dir + model.__class__.__name__ + time_string + '.pth')
-print("Saved model as " + model_out_dir + model.__class__.__name__ + time_string + '.pth')
+    train_ds.close_hf()
 
-train_ds.close_hf()
-
-plt.plot(np.arange(len(losses_train)), losses_train, label="train loss")
-plt.legend()
-plt.show()
+    plt.plot(np.arange(len(losses_train)), losses_train, label="train loss")
+    plt.legend()
+    plt.savefig(model_out_dir + '/loss.png')
+    plt.show()
