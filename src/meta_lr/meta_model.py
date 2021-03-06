@@ -51,9 +51,9 @@ class MOCAST4_METALR(nn.Module):
         self.tmat = self.tmat.to(device)
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
-        if not self.sm:
-            enc_h_s = nn.init.xavier_normal_(enc_h_s)
-            enc_c_s = nn.init.xavier_normal_(enc_c_s)
+        # if not self.sm:
+        #     enc_h_s = nn.init.xavier_normal_(enc_h_s)
+        #     enc_c_s = nn.init.xavier_normal_(enc_c_s)
 
         # Variable length state LSTM
         state = self.state_fc(state.float())
