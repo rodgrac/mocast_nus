@@ -57,7 +57,7 @@ def forward_mm(data, model, device, criterion):
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
     # Inner Loop
-    for l in range(1):
+    for l in range(0):
         outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
         labels_h = find_closest_traj(outputs.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels_h, :, :], history_window)
@@ -67,10 +67,10 @@ def forward_mm(data, model, device, criterion):
         loss = loss * torch.unsqueeze(history_mask, 2)
         loss = loss.mean()
 
-        grads = torch.autograd.grad(loss, model.final_fc3.parameters(), create_graph=True)
+        grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
 
         with torch.no_grad():
-            for i, p in enumerate(model.final_fc3.parameters()):
+            for i, p in enumerate(model.parameters()):
                 new_p = p - 5e-4 * grads[i]
                 p.data.copy_(new_p)
         print('Inner loop Loss: {:.4f}'.format(loss))
@@ -90,102 +90,104 @@ def dump_predictions(pred_out, scores, token, helper):
     return pred_class.serialize()
 
 
-torch.cuda.empty_cache()
-model_path = "../../models/MOCAST4_METALR_03_04_2021_20_54_34.pth"
-ds_type = 'v1.0-trainval'
-#ds_type = 'v1.0-mini'
+if __name__ == '__main__':
+    torch.cuda.empty_cache()
+    model_out_dir_root = '/scratch/rodney/models/nuScenes'
+    model_path = model_out_dir_root + "/MOCAST4_METALR_03_05_2021_17_44_32/Epoch_10000_03_05_2021_18_49_13.pth"
+    ds_type = 'v1.0-trainval'
+    #ds_type = 'v1.0-mini'
 
-in_ch = 3
-out_pts = 12
-poly_deg = 5
-num_modes = 10
+    in_ch = 3
+    out_pts = 12
+    poly_deg = 5
+    num_modes = 10
 
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                            std=[0.229, 0.224, 0.225])])
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                                                std=[0.229, 0.224, 0.225])])
 
-val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-' + ds_type + '-val.h5', transform)
+    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-' + ds_type + '-val.h5', transform)
 
-nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
-pred_helper = PredictHelper(nuscenes)
+    nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
+    pred_helper = PredictHelper(nuscenes)
 
-val_dl = DataLoader(val_ds, shuffle=False, batch_size=1)
+    val_dl = DataLoader(val_ds, shuffle=False, batch_size=1)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes, train=False).to(device)
+    model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes, train=False).to(device)
 
-optimizer = torch.optim.SGD(model.parameters(), 1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), 1e-4)
 
-# if torch.cuda.device_count() > 1:
-#     # print("Using", torch.cuda.device_count(), "GPUs!")
-#     model = nn.DataParallel(model, device_ids=[0, 1])
+    # if torch.cuda.device_count() > 1:
+    #     # print("Using", torch.cuda.device_count(), "GPUs!")
+    #     model = nn.DataParallel(model, device_ids=[0, 1])
 
-print("Loading model ", model_path)
-model.load_state_dict(torch.load(model_path))
+    print("Loading model ", model_path)
+    model.load_state_dict(torch.load(model_path))
 
-criterion_reg = nn.MSELoss(reduction="none")
-criterion_cls = nn.CrossEntropyLoss()
-
-model.eval()
-torch.set_grad_enabled(False)
-
-val_out = []
-val_scores = []
-val_tokens = []
-progress_bar = tqdm(val_dl)
-
-org_params = clone_model_param(model.final_fc3)
-for data in progress_bar:
-    with torch.enable_grad():
-        optimizer.zero_grad()
-        outputs, scores = forward_mm(data, model, device, [criterion_reg, criterion_cls])
+    criterion_reg = nn.MSELoss(reduction="none")
+    criterion_cls = nn.CrossEntropyLoss()
 
     model.eval()
-    update_param_data(model.final_fc3, org_params)
+    torch.set_grad_enabled(False)
 
-    val_out.extend(outputs.cpu().numpy())
-    val_scores.extend(scores.cpu().numpy())
-    val_tokens.extend(data["token"])
+    val_out = []
+    val_scores = []
+    val_tokens = []
+    progress_bar = tqdm(val_dl)
 
-val_ds.close_hf()
+    org_params = clone_model_param(model)
+    for data in progress_bar:
+        with torch.enable_grad():
+            optimizer.zero_grad()
+            outputs, scores = forward_mm(data, model, device, [criterion_reg, criterion_cls])
 
-model_preds = []
-for output, score, token in zip(val_out, val_scores, val_tokens):
-    model_preds.append(dump_predictions(output, score, token, pred_helper))
+        model.eval()
+        update_param_data(model, org_params)
 
-json.dump(model_preds, open(os.path.join('../../out', 'mocast4_preds.json'), "w"))
+        val_out.extend(outputs.cpu().numpy())
+        val_scores.extend(scores.cpu().numpy())
+        val_tokens.extend(data["token"])
 
-'''############################ Quantitative ###########################################'''
-config = load_prediction_config(pred_helper, '../../config/eval_metric_config.json')
-print("[Eval] MOCAST4 metrics")
-eval_metrics('../../out/mocast4_preds.json', pred_helper, config, '../../out/mocast4_metrics.json')
+    val_ds.close_hf()
 
-'''############################ Qualitative ###########################################'''
-for i in np.random.randint(0, len(val_out), 20):
-    img = render_map(pred_helper, val_tokens[i])
-    gt_cord = render_trajectories(pred_helper, val_tokens[i])
-    fig, ax = plt.subplots(1, 1)
-    ax.grid(b=None)
-    ax.imshow(img)
-    ax.plot(gt_cord[:, 0],
-            gt_cord[:, 1],
-            'w--o',
-            linewidth=4,
-            markersize=3,
-            zorder=650,
-            path_effects=[pe.Stroke(linewidth=5, foreground='r'), pe.Normal()])
+    model_preds = []
+    for output, score, token in zip(val_out, val_scores, val_tokens):
+        model_preds.append(dump_predictions(output, score, token, pred_helper))
 
-    top_3 = np.argsort(val_scores[i])[-1:-4:-1]
-    for ind in top_3:
-        pred_cord = render_trajectories(pred_helper, val_tokens[i], val_out[i][ind])
+    json.dump(model_preds, open(os.path.join('../../out', 'mocast4_preds.json'), "w"))
 
-        ax.plot(pred_cord[:, 0],
-                pred_cord[:, 1],
+    '''############################ Quantitative ###########################################'''
+    config = load_prediction_config(pred_helper, '../../config/eval_metric_config.json')
+    print("[Eval] MOCAST4 metrics")
+    eval_metrics('../../out/mocast4_preds.json', pred_helper, config, '../../out/mocast4_metrics.json')
+
+    '''############################ Qualitative ###########################################'''
+    for i in np.random.randint(0, len(val_out), 20):
+        img = render_map(pred_helper, val_tokens[i])
+        gt_cord = render_trajectories(pred_helper, val_tokens[i])
+        fig, ax = plt.subplots(1, 1)
+        ax.grid(b=None)
+        ax.imshow(img)
+        ax.plot(gt_cord[:, 0],
+                gt_cord[:, 1],
                 'w--o',
                 linewidth=4,
                 markersize=3,
                 zorder=650,
-                path_effects=[pe.Stroke(linewidth=5, foreground='b'), pe.Normal()])
-        plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
-#
-plt.show()
+                path_effects=[pe.Stroke(linewidth=5, foreground='r'), pe.Normal()])
+
+        top_3 = np.argsort(val_scores[i])[-1:-4:-1]
+        for ind in top_3:
+            pred_cord = render_trajectories(pred_helper, val_tokens[i], val_out[i][ind])
+
+            ax.plot(pred_cord[:, 0],
+                    pred_cord[:, 1],
+                    'w--o',
+                    linewidth=4,
+                    markersize=3,
+                    zorder=650,
+                    path_effects=[pe.Stroke(linewidth=5, foreground='b'), pe.Normal()])
+            plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
+    #
+    plt.show()
