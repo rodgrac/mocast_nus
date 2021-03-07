@@ -1,10 +1,11 @@
 from torchvision.models.resnet import resnet50
 import torch
+import math
 from torch import nn, optim
 import numpy as np
 from orthnet import Legendre_Normalized
 from orthnet.backend import NumpyBackend
-import torch.nn.functional as f
+import torch.nn.functional as F
 import torch_dct as dct
 import torch.fft
 
@@ -15,6 +16,7 @@ class MOCAST4_METALR(nn.Module):
         super().__init__()
         self.degree = degree
         self.modes = modes
+        self.out_pts = ((degree + 1) * 2 + 1) * self.modes
         self.basis_norm = False
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
@@ -29,15 +31,26 @@ class MOCAST4_METALR(nn.Module):
 
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
 
-        self.final_fc1 = nn.Linear(in_features=512, out_features=256)
-        self.final_fc2 = nn.Linear(in_features=256, out_features=256)
-        self.l_relu = nn.ReLU()
+        # self.final_fc1 = nn.Linear(in_features=512, out_features=256)
+        # self.final_fc2 = nn.Linear(in_features=256, out_features=256)
+        # self.l_relu = nn.ReLU()
 
         self.t_n = np.arange(-3, out_frames / 2 + 0.001, 0.5, dtype=np.float32)
-
         self.t_n = self.t_n / self.t_n[-1]
 
-        self.final_fc3 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
+        # self.final_fc3 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
+
+        self.dec_params = nn.ParameterList([
+            nn.Parameter(torch.Tensor(256, 512).uniform_(-1. / math.sqrt(512), 1. / math.sqrt(512)).requires_grad_()),
+            nn.Parameter(torch.Tensor(256).zero_().requires_grad_()),
+
+            nn.Parameter(torch.Tensor(256, 256).uniform_(-1. / math.sqrt(256), 1. / math.sqrt(256)).requires_grad_()),
+            nn.Parameter(torch.Tensor(256).zero_().requires_grad_()),
+
+            nn.Parameter(
+                torch.Tensor(self.out_pts, 256).uniform_(-1. / math.sqrt(256), 1. / math.sqrt(256)).requires_grad_()),
+            nn.Parameter(torch.Tensor(self.out_pts).zero_().requires_grad_()),
+        ])
 
         # Legendre Orthogonal basis matrix
         self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
@@ -47,7 +60,17 @@ class MOCAST4_METALR(nn.Module):
         else:
             self.sm = nn.Softmax(dim=1)
 
-    def forward(self, x, device, state=None, state_len=None, hist=False):
+    def decoder(self, x, params):
+        x = F.linear(x, params[0], params[1])
+        x = F.relu(x)
+
+        x = F.linear(x, params[2], params[3])
+        x = F.relu(x)
+
+        x = F.linear(x, params[4], params[5])
+        return x
+
+    def forward(self, x, device, state=None, state_len=None, hist=False, dec_params=None):
         self.tmat = self.tmat.to(device)
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
@@ -69,13 +92,14 @@ class MOCAST4_METALR(nn.Module):
         # Concatenate state encoding with resnet encoding
         out = torch.cat((self.resnet(x), out), dim=1)
 
-        out = self.final_fc1(out)
-        out = self.l_relu(out)
-
-        out = self.final_fc2(out)
-        out = self.l_relu(out)
-
-        out = self.final_fc3(out)
+        # out = self.final_fc1(out)
+        # out = self.l_relu(out)
+        #
+        # out = self.final_fc2(out)
+        # out = self.l_relu(out)
+        #
+        # out = self.final_fc3(out)
+        out = self.decoder(out, dec_params)
         out = out.view(x.size(0), self.modes, -1).clone()
 
         conf = out[:, :, -1]

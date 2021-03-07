@@ -48,17 +48,18 @@ def find_closest_traj(pred, gt):
     return labels
 
 
-def forward_mm(data, model, device, criterion):
-    model.train()
+def forward_mm(data, model, device, criterion, new_params):
     inputs = data["image"].to(device)
 
     agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
     history_window = torch.flip(data["agent_past"], [1]).to(device)
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
+    print(torch.sum(new_params[4]))
     # Inner Loop
-    for l in range(5):
-        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
+    for l in range(4):
+        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True,
+                                dec_params=new_params)
         labels_h = find_closest_traj(outputs.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels_h, :, :], history_window)
         loss_cls = criterion[1](scores, labels_h)
@@ -66,16 +67,15 @@ def forward_mm(data, model, device, criterion):
         # not all the output steps are valid, but we can filter them out from the loss using availabilities
         loss = loss * torch.unsqueeze(history_mask, 2)
         loss = loss.mean()
-
-        grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
-
-        with torch.no_grad():
-            for i, p in enumerate(model.parameters()):
-                new_p = p - 1e-4 * grads[i]
-                p.data.copy_(new_p)
         print('Inner loop Loss: {:.4f}'.format(loss))
 
-    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
+        # Gradients wrt model params
+        grads = torch.autograd.grad(loss, new_params)
+
+        new_params = [(new_params[i] - 1e-4 * grads[i]) for i in range(len(new_params))]
+
+    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False,
+                            dec_params=new_params)
 
     return outputs, scores
 
@@ -86,15 +86,16 @@ def dump_predictions(pred_out, scores, token, helper):
     for i in range(pred_out.shape[0]):
         pred_out[i, :, :] = convert_local_coords_to_global(pred_out[i, :, :], annotation['translation'],
                                                            annotation['rotation'])
-    pred_class = Prediction(instance, sample, pred_out, scores)
+    # Dump only future preds for eval
+    pred_class = Prediction(instance, sample, pred_out[:, 7:, ], scores)
     return pred_class.serialize()
 
 
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST4_METALR_03_06_2021_18_03_03/Epoch_3000_03_06_2021_20_06_20.pth"
-    #ds_type = 'v1.0-trainval'
+    model_path = model_out_dir_root + "/MOCAST4_METALR_03_07_2021_12_28_38/Epoch_10000_03_07_2021_14_32_02.pth"
+    # ds_type = 'v1.0-trainval'
     ds_type = 'v1.0-mini'
 
     in_ch = 3
@@ -110,9 +111,9 @@ if __name__ == '__main__':
     nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
     pred_helper = PredictHelper(nuscenes)
 
-    val_dl = DataLoader(val_ds, shuffle=False, batch_size=1)
+    val_dl = DataLoader(val_ds, shuffle=True, batch_size=1)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes, train=False).to(device)
 
@@ -121,7 +122,7 @@ if __name__ == '__main__':
     #     model = nn.DataParallel(model, device_ids=[0, 1])
 
     print("Loading model ", model_path)
-    model.load_state_dict(torch.load(model_path))
+    model.load_state_dict(torch.load(model_path, map_location=device))
 
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
@@ -134,15 +135,10 @@ if __name__ == '__main__':
     val_tokens = []
     progress_bar = tqdm(val_dl)
 
-    org_params = clone_model_param(model)
     for data in progress_bar:
+        dec_params = model.dec_params
         with torch.enable_grad():
-            model.zero_grad()
-            outputs, scores = forward_mm(data, model, device, [criterion_reg, criterion_cls])
-
-        model.eval()
-        update_param_data(model, org_params)
-
+            outputs, scores = forward_mm(data, model, device, [criterion_reg, criterion_cls], dec_params)
         val_out.extend(outputs.cpu().numpy())
         val_scores.extend(scores.cpu().numpy())
         val_tokens.extend(data["token"])
@@ -151,7 +147,7 @@ if __name__ == '__main__':
 
     model_preds = []
     for output, score, token in zip(val_out, val_scores, val_tokens):
-        model_preds.append(dump_predictions(output[:, 7:, :], score, token, pred_helper))
+        model_preds.append(dump_predictions(output, score, token, pred_helper))
 
     json.dump(model_preds, open(os.path.join('../../out', 'mocast4_preds.json'), "w"))
 
@@ -159,6 +155,7 @@ if __name__ == '__main__':
     config = load_prediction_config(pred_helper, '../../config/eval_metric_config.json')
     print("[Eval] MOCAST4 metrics")
     eval_metrics('../../out/mocast4_preds.json', pred_helper, config, '../../out/mocast4_metrics.json')
+    exit()
 
     '''############################ Qualitative ###########################################'''
     for i in np.random.randint(0, len(val_out), 20):
@@ -178,7 +175,6 @@ if __name__ == '__main__':
         top_3 = np.argsort(val_scores[i])[-1:-4:-1]
         for ind in top_3:
             pred_cord = render_trajectories(pred_helper, val_tokens[i], val_out[i][ind])
-
             ax.plot(pred_cord[:, 0],
                     pred_cord[:, 1],
                     'w--o',

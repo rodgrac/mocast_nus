@@ -51,7 +51,7 @@ def find_closest_traj(pred, gt):
     return labels
 
 
-def forward_mm(data, model, device, criterion):
+def forward_mm(data, model, device, criterion, new_params):
     # Raster input
     inputs = data["image"].to(device)
 
@@ -67,9 +67,10 @@ def forward_mm(data, model, device, criterion):
     target_mask = data['mask_future'].to(device)
 
     # Inner GD Loop
-    for l in range(5):
+    for l in range(4):
         # Train loss on history
-        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
+        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True,
+                                dec_params=new_params)
         labels_h = find_closest_traj(outputs.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
         # Regression + Classification loss
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels_h, :, :], history_window)
@@ -81,15 +82,18 @@ def forward_mm(data, model, device, criterion):
         print('Inner loop Loss: {:.4f}'.format(loss))
 
         # Gradients wrt model params
-        grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
+        grads = torch.autograd.grad(loss, new_params, create_graph=True)
 
-        with torch.no_grad():
-            for i, p in enumerate(model.parameters()):
-                new_p = p - 1e-4 * grads[i]
-                p.data.copy_(new_p)
+        new_params = [(new_params[i] - 1e-4 * grads[i]) for i in range(len(new_params))]
+
+        # with torch.no_grad():
+        #     for i, p in enumerate(model.parameters()):
+        #         new_p = p - 1e-4 * grads[i]
+        #         p.data.copy_(new_p)
 
     # Evaluate loss on targets
-    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
+    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False,
+                            dec_params=new_params)
     labels = find_closest_traj(outputs.cpu().detach().numpy(), targets.cpu().detach().numpy()).to(device)
     loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
     loss_cls = criterion[1](scores, labels)
@@ -103,8 +107,9 @@ def forward_mm(data, model, device, criterion):
 def train(model, train_ds, device, criterion, model_out_dir_):
     # ==== TRAIN LOOP
     epochs = 10000
-    batch_size = 8
+    batch_size = 4
     optimizer = torch.optim.SGD(model.parameters(), 1e-4)
+
     # torch.autograd.set_detect_anomaly(True)
 
     sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
@@ -128,22 +133,24 @@ def train(model, train_ds, device, criterion, model_out_dir_):
 
         batch_loss = []
         # Keep a copy of the initial model params 'theta'
-        init_params = clone_model_param(model)
+        # init_params = clone_model_param(model)
 
         # Inner loop
         for b in range(len(data['token'])):
             print("Sample {}:".format(b))
             sample = get_batch_sample(data, b)
 
+            new_params = model.dec_params
+
             # model.zero_grad()
 
             with torch.enable_grad():
                 # Gradient descent on history and evaluated on future to get updated params phi
-                batch_loss.append(forward_mm(sample, model, device, criterion))
+                batch_loss.append(forward_mm(sample, model, device, criterion, new_params))
 
-            with torch.no_grad():
-                # Reset model params to initial 'theta'
-                reset_param_data(model, init_params)
+            # with torch.no_grad():
+            #     # Reset model params to initial 'theta'
+            #     reset_param_data(model, init_params)
 
         # Sum all the losses 
         loss = sum(batch_loss)
