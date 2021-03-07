@@ -46,6 +46,8 @@ def render_trajectories(helper, token, traj=None):
     # Render ground truth
     if traj is None:
         traj = helper.get_future_for_agent(instance, sample, 6, in_agent_frame=False)
+        traj_h = np.flip(helper.get_past_for_agent(instance, sample, 3, in_agent_frame=False), axis=0)
+        traj = np.append(traj, traj_h, axis=0)
     sample_yaw = quaternion_yaw(Quaternion(sample_ann['rotation']))
     rotation_mat = get_rotation_matrix((800, 800, 3), sample_yaw)
     row_f, col_f = crop_offsets()

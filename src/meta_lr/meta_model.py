@@ -85,8 +85,12 @@ class MOCAST4_METALR(nn.Module):
             out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
             out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
         else:
-            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
-            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
+            if self.sm:
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
+            else:
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
 
         if self.sm:
             # Testing
@@ -99,4 +103,3 @@ class MOCAST4_METALR(nn.Module):
         else:
             # Training
             return torch.stack((out_x, out_y), dim=3), conf
-

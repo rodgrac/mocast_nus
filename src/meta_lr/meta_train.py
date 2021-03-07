@@ -30,7 +30,7 @@ def clone_model_param(model):
 
 def reset_param_data(model, new_params):
     for name, params in model.named_parameters():
-        params.data.copy_(new_params[name])
+        params.data.copy_(new_params[name].data)
 
 
 def get_batch_sample(data, ind):
@@ -85,7 +85,7 @@ def forward_mm(data, model, device, criterion):
 
         with torch.no_grad():
             for i, p in enumerate(model.parameters()):
-                new_p = p - 5e-5 * grads[i]
+                new_p = p - 1e-4 * grads[i]
                 p.data.copy_(new_p)
 
     # Evaluate loss on targets
@@ -107,8 +107,8 @@ def train(model, train_ds, device, criterion, model_out_dir_):
     optimizer = torch.optim.SGD(model.parameters(), 1e-4)
     # torch.autograd.set_detect_anomaly(True)
 
-    # sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
-    #                                             steps_per_epoch=1)
+    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
+                                                steps_per_epoch=1)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size)
     tr_it = iter(train_dl)
@@ -135,7 +135,7 @@ def train(model, train_ds, device, criterion, model_out_dir_):
             print("Sample {}:".format(b))
             sample = get_batch_sample(data, b)
 
-            optimizer.zero_grad()
+            # model.zero_grad()
 
             with torch.enable_grad():
                 # Gradient descent on history and evaluated on future to get updated params phi
@@ -156,7 +156,7 @@ def train(model, train_ds, device, criterion, model_out_dir_):
         # nn.utils.clip_grad_value_(model.parameters(), 0.5)
         # Update theta
         optimizer.step()
-        # sched.step()
+        sched.step()
 
         epoch_mean_loss.append(loss.cpu().detach().item())
         print("Epoch: {}/{} Outer loss: {} loss(avg): {}".format(epoch + 1, epochs, loss.cpu().detach().item(),
@@ -181,7 +181,7 @@ if __name__ == '__main__':
 
     train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
 
-    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes).to(device)
 

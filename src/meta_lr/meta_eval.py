@@ -57,7 +57,7 @@ def forward_mm(data, model, device, criterion):
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
     # Inner Loop
-    for l in range(0):
+    for l in range(5):
         outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
         labels_h = find_closest_traj(outputs.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels_h, :, :], history_window)
@@ -71,7 +71,7 @@ def forward_mm(data, model, device, criterion):
 
         with torch.no_grad():
             for i, p in enumerate(model.parameters()):
-                new_p = p - 5e-4 * grads[i]
+                new_p = p - 1e-4 * grads[i]
                 p.data.copy_(new_p)
         print('Inner loop Loss: {:.4f}'.format(loss))
 
@@ -93,9 +93,9 @@ def dump_predictions(pred_out, scores, token, helper):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST4_METALR_03_05_2021_17_44_32/Epoch_10000_03_05_2021_18_49_13.pth"
-    ds_type = 'v1.0-trainval'
-    #ds_type = 'v1.0-mini'
+    model_path = model_out_dir_root + "/MOCAST4_METALR_03_06_2021_18_03_03/Epoch_3000_03_06_2021_20_06_20.pth"
+    #ds_type = 'v1.0-trainval'
+    ds_type = 'v1.0-mini'
 
     in_ch = 3
     out_pts = 12
@@ -112,11 +112,9 @@ if __name__ == '__main__':
 
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=1)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes, train=False).to(device)
-
-    optimizer = torch.optim.SGD(model.parameters(), 1e-4)
 
     # if torch.cuda.device_count() > 1:
     #     # print("Using", torch.cuda.device_count(), "GPUs!")
@@ -139,7 +137,7 @@ if __name__ == '__main__':
     org_params = clone_model_param(model)
     for data in progress_bar:
         with torch.enable_grad():
-            optimizer.zero_grad()
+            model.zero_grad()
             outputs, scores = forward_mm(data, model, device, [criterion_reg, criterion_cls])
 
         model.eval()
@@ -153,7 +151,7 @@ if __name__ == '__main__':
 
     model_preds = []
     for output, score, token in zip(val_out, val_scores, val_tokens):
-        model_preds.append(dump_predictions(output, score, token, pred_helper))
+        model_preds.append(dump_predictions(output[:, 7:, :], score, token, pred_helper))
 
     json.dump(model_preds, open(os.path.join('../../out', 'mocast4_preds.json'), "w"))
 
