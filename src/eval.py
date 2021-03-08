@@ -76,7 +76,7 @@ def dump_predictions(pred_out, scores, token, helper):
     for i in range(pred_out.shape[0]):
         pred_out[i, :, :] = convert_local_coords_to_global(pred_out[i, :, :], annotation['translation'],
                                                            annotation['rotation'])
-    pred_class = Prediction(instance, sample, pred_out, scores)
+    pred_class = Prediction(instance, sample, pred_out[:, 7:, :], scores)
     return pred_class.serialize()
 
 

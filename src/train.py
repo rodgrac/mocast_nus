@@ -11,17 +11,17 @@ import matplotlib.pyplot as plt
 
 from model import MOCAST_4
 from nusc_dataloader import NuScenes_HDF
+from utils import save_model_dict
 
 # Prints whole tensor for debug
 # torch.set_printoptions(profile="full")
 
 
+# Returns closest mode to GT
 def find_closest_traj(pred, gt):
-    gt = np.expand_dims(gt, 1)
-    ade = np.sum((gt - pred) ** 2, axis=-1) ** 0.5
-    ade = np.mean(ade, axis=-1)
-    labels = torch.from_numpy(np.argmin(ade, axis=-1))
-    return labels
+    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
+    ade = torch.mean(ade, dim=-1)
+    return torch.argmin(ade, dim=-1)
 
 
 def forward_mm(data, model, device, criterion):
@@ -37,7 +37,7 @@ def forward_mm(data, model, device, criterion):
     # Forward pass
     outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
 
-    labels = find_closest_traj(outputs.cpu().detach().numpy(), targets.cpu().detach().numpy()).to(device)
+    labels = find_closest_traj(outputs, targets)
 
     loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
     loss_cls = criterion[1](scores, labels)
@@ -50,7 +50,7 @@ def forward_mm(data, model, device, criterion):
     return loss, outputs
 
 
-def train(model, train_dataloader, device, criterion):
+def train(model, train_dataloader, device, criterion, model_out_dir_):
     # ==== TRAIN LOOP
     epochs = 15
     optimizer = torch.optim.Adam(model.parameters(), 1e-4)
@@ -82,34 +82,51 @@ def train(model, train_dataloader, device, criterion):
 
         epoch_mean_loss.append(np.mean(losses_train))
 
+        if (epoch + 1) % 5 == 0:
+            save_model_dict(model, model_out_dir_, epoch + 1)
+
     return epoch_mean_loss
 
 
-torch.cuda.empty_cache()
+if __name__ == '__main__':
+    torch.cuda.empty_cache()
+    in_ch = 3
+    out_pts = 12
+    poly_deg = 5
+    num_modes = 10
+    batch_size = 16
+    model_out_dir_root = '/scratch/rodney/models/nuScenes'
 
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225])])
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])])
 
-train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
+    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
 
-train_dl = DataLoader(train_ds, shuffle=True, batch_size=16, num_workers=16)
+    train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST_4(3, 12, 5, 10, 16, dec='polytr').to(device)
+    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='polytr').to(device)
 
-criterion_reg = nn.MSELoss(reduction="none")
-criterion_cls = nn.CrossEntropyLoss()
+    model_out_dir = os.path.join(model_out_dir_root,
+                                     model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
 
-# Training
-losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls])
+    # Create model out directory
+    if not os.path.exists(model_out_dir):
+        os.makedirs(model_out_dir)
 
-time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
-torch.save(model.state_dict(), '../models/' + model.__class__.__name__ + time_string + '.pth')
-print("Saved model as ../models/" + model.__class__.__name__ + time_string + '.pth')
+    criterion_reg = nn.MSELoss(reduction="none")
+    criterion_cls = nn.CrossEntropyLoss()
 
-train_ds.close_hf()
+    # Training
+    losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls], model_out_dir)
 
-plt.plot(np.arange(len(losses_train)), losses_train, label="train loss")
-plt.legend()
-plt.show()
+    time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
+    torch.save(model.state_dict(), '../models/' + model.__class__.__name__ + time_string + '.pth')
+    print("Saved model as ../models/" + model.__class__.__name__ + time_string + '.pth')
+
+    train_ds.close_hf()
+
+    plt.plot(np.arange(len(losses_train)), losses_train, label="train loss")
+    plt.legend()
+    plt.show()
