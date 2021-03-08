@@ -5,12 +5,14 @@ import time
 import json
 import numpy as np
 from tqdm import tqdm
+import torch.nn as nn
 from torch.utils.data import DataLoader
+import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 
 from model import MOCAST_4
-from process_ds import load_obj
+from nusc_dataloader import NuScenes_HDF
 from render_prediction import render_map, render_trajectories
 from utils import eval_metrics
 
@@ -25,14 +27,47 @@ from nuscenes.prediction.helper import convert_local_coords_to_global
 NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
 
 
-def forward_mm(data, model, device):
+def forward_mm(data, model, device, test_opt=False):
     inputs = data["image"].to(device)
-    agent_seq_len = data["agent_state_len"].to(device)
+
+    agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
 
     # Forward pass
-    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
+    with torch.no_grad():
+        outputs, scores, coeffs = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
+    if test_opt:
+        torch.set_grad_enabled(True)
+        coeffs_new = test_time_opt(data, coeffs, device)
+        torch.set_grad_enabled(False)
+        outputs = model.test_opt(coeffs_new, hist=False)
 
     return outputs, scores
+
+
+def test_time_opt(data, coeffs, device):
+    mse_loss = nn.MSELoss(reduction='none')
+    coeffs_ = coeffs.detach().clone().requires_grad_(True)
+    weight_mask = torch.exp(torch.div(torch.arange(-6, 1, dtype=torch.float32), 4)).unsqueeze(0).repeat(
+        coeffs.size(0), 1)
+
+    target = torch.flip(data["agent_past"], [1]).to(device)
+    history_mask = (torch.flip(data['mask_past'], [1]) * weight_mask).to(device)
+    losses = []
+    for epoch in range(20):
+        with torch.enable_grad():
+            output = model.test_opt(coeffs_, hist=True)
+            loss = mse_loss(output, target.unsqueeze(1).repeat(1, 10, 1, 1))
+            loss = loss * history_mask.unsqueeze(1).unsqueeze(3)
+            loss = loss.mean()
+            losses.append('{:.4f}'.format(loss.item()))
+            loss.backward()
+
+        with torch.no_grad():
+            coeffs_ -= coeffs_.grad
+
+        coeffs_.grad.zero_()
+    print(losses)
+    return coeffs_.detach()
 
 
 def dump_predictions(pred_out, scores, token, helper):
@@ -46,18 +81,22 @@ def dump_predictions(pred_out, scores, token, helper):
 
 
 torch.cuda.empty_cache()
+model_path = "../models/MOCAST_4_02_28_2021_14_04_55.pth"
+ds_type = 'v1.0-trainval'
 
-val_ds = load_obj('../datasets/nuScenes/processed/nuscenes-mini-val.pkl')
-model_path = "../models/MOCAST_4_02_03_2021_15_54_20.pth"
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                                            std=[0.229, 0.224, 0.225])])
 
-nuscenes = NuScenes('v1.0-mini', dataroot=NUSCENES_DATASET)
+val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-' + ds_type + '-val.h5', transform)
+
+nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
 pred_helper = PredictHelper(nuscenes)
 
 val_dl = DataLoader(val_ds, shuffle=False, batch_size=16, num_workers=16)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = MOCAST_4(3, 10, 5, 10, 16, train=False).to(device)
+model = MOCAST_4(3, 12, 5, 10, 16, train=False, dec='polytr').to(device)
 
 print("Loading model ", model_path)
 model.load_state_dict(torch.load(model_path))
@@ -70,10 +109,14 @@ val_scores = []
 val_tokens = []
 progress_bar = tqdm(val_dl)
 for data in progress_bar:
-    outputs, scores = forward_mm(data, model, device)
+
+    outputs, scores = forward_mm(data, model, device, test_opt=False)
+
     val_out.extend(outputs.cpu().numpy())
     val_scores.extend(scores.cpu().numpy())
     val_tokens.extend(data["token"])
+
+val_ds.close_hf()
 
 model_preds = []
 for output, score, token in zip(val_out, val_scores, val_tokens):
@@ -81,18 +124,15 @@ for output, score, token in zip(val_out, val_scores, val_tokens):
 
 json.dump(model_preds, open(os.path.join('../out', 'mocast4_preds.json'), "w"))
 
-
 '''############################ Quantitative ###########################################'''
 config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
 print("[Eval] MOCAST4 metrics")
 eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
-
-
 '''############################ Qualitative ###########################################'''
-for i in range(0, len(val_out), 5):
+
+for i in np.random.randint(0, len(val_out), 10):
     img = render_map(pred_helper, val_tokens[i])
     gt_cord = render_trajectories(pred_helper, val_tokens[i])
-
     fig, ax = plt.subplots(1, 1)
     ax.grid(b=None)
     ax.imshow(img)
