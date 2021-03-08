@@ -4,6 +4,7 @@ import torch
 import time
 import cv2
 import random
+import higher
 import numpy as np
 from tqdm import tqdm
 from torch.utils.data import DataLoader
@@ -44,14 +45,12 @@ def get_batch_sample(data, ind):
 
 # Returns closest mode to GT
 def find_closest_traj(pred, gt):
-    gt = np.expand_dims(gt, 1)
-    ade = np.sum((gt - pred) ** 2, axis=-1) ** 0.5
-    ade = np.mean(ade, axis=-1)
-    labels = torch.from_numpy(np.argmin(ade, axis=-1))
-    return labels
+    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
+    ade = torch.mean(ade, dim=-1)
+    return torch.argmin(ade, dim=-1)
 
 
-def forward_mm(data, model, device, criterion, new_params):
+def forward_mm(data, f_model, device, criterion, dopt):
     # Raster input
     inputs = data["image"].to(device)
 
@@ -67,109 +66,79 @@ def forward_mm(data, model, device, criterion, new_params):
     target_mask = data['mask_future'].to(device)
 
     # Inner GD Loop
-    for l in range(4):
+    for _ in range(1):
         # Train loss on history
-        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True,
-                                dec_params=new_params)
-        labels_h = find_closest_traj(outputs.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
+        outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
+        labels = find_closest_traj(outputs, history_window)
         # Regression + Classification loss
-        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels_h, :, :], history_window)
-        loss_cls = criterion[1](scores, labels_h)
-        loss = loss_reg + loss_cls
+        spt_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
+        spt_loss_cls = criterion[1](scores, labels)
+        spt_loss = spt_loss_reg + spt_loss_cls
         # not all the output steps are valid, so apply mask to ignore invalid ones
-        loss = loss * torch.unsqueeze(history_mask, 2)
-        loss = loss.mean()
-        print('Inner loop Loss: {:.4f}'.format(loss))
+        spt_loss = spt_loss * torch.unsqueeze(history_mask, 2)
+        spt_loss = spt_loss.mean()
+        print('Inner loop Loss: {:.4f}'.format(spt_loss.detach()))
 
-        # Gradients wrt model params
-        grads = torch.autograd.grad(loss, new_params, create_graph=True)
-
-        new_params = [(new_params[i] - 1e-4 * grads[i]) for i in range(len(new_params))]
-
-        # with torch.no_grad():
-        #     for i, p in enumerate(model.parameters()):
-        #         new_p = p - 1e-4 * grads[i]
-        #         p.data.copy_(new_p)
+        dopt.step(spt_loss)
 
     # Evaluate loss on targets
-    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False,
-                            dec_params=new_params)
-    labels = find_closest_traj(outputs.cpu().detach().numpy(), targets.cpu().detach().numpy()).to(device)
-    loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
-    loss_cls = criterion[1](scores, labels)
-    loss = loss_reg + loss_cls
-    loss = loss * torch.unsqueeze(target_mask, 2)
-    loss = loss.mean()
+    outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
+    labels = find_closest_traj(outputs, targets)
+    qry_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
+    qry_loss_cls = criterion[1](scores, labels)
+    qry_loss = qry_loss_reg + qry_loss_cls
+    qry_loss = qry_loss * torch.unsqueeze(target_mask, 2)
+    qry_loss = qry_loss.mean()
 
-    return loss
+    qry_loss.backward()
+
+    return qry_loss.detach()
 
 
-def train(model, train_ds, device, criterion, model_out_dir_):
+def train(model, train_dl, device, criterion, model_out_dir_):
     # ==== TRAIN LOOP
-    epochs = 10000
-    batch_size = 4
-    optimizer = torch.optim.SGD(model.parameters(), 1e-4)
+    epochs = 10
+    meta_optim = torch.optim.Adam(model.parameters(), 1e-3)
 
     # torch.autograd.set_detect_anomaly(True)
 
-    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
-                                                steps_per_epoch=1)
-
-    train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size)
-    tr_it = iter(train_dl)
+    # sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
+    #                                             steps_per_epoch=1)
+    # sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
     epoch_mean_loss = []
     # Outer loop
     for epoch in range(epochs):
-        try:
-            data = next(tr_it)
-        except StopIteration:
-            train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size)
-            tr_it = iter(train_dl)
-            data = next(tr_it)
+        losses_train = []
+        progress_bar = tqdm(train_dl)
+        for data in progress_bar:
+            model.train()
+            torch.set_grad_enabled(True)
 
-        model.train()
-        torch.set_grad_enabled(True)
+            batch_loss = []
+            inner_opt = torch.optim.SGD(model.parameters(), lr=1e-2)
 
-        batch_loss = []
-        # Keep a copy of the initial model params 'theta'
-        # init_params = clone_model_param(model)
+            # Inner loop
+            for b in range(len(data['token'])):
+                print("Sample {}:".format(b))
+                sample = get_batch_sample(data, b)
 
-        # Inner loop
-        for b in range(len(data['token'])):
-            print("Sample {}:".format(b))
-            sample = get_batch_sample(data, b)
+                with torch.backends.cudnn.flags(enabled=False):
+                    with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
+                        # Gradient descent on history and evaluated on future to get updated params phi
+                        batch_loss.append(forward_mm(sample, fmodel, device, criterion, diffopt))
 
-            new_params = model.dec_params
+            meta_optim.step()
+            meta_optim.zero_grad()
 
-            # model.zero_grad()
-
-            with torch.enable_grad():
-                # Gradient descent on history and evaluated on future to get updated params phi
-                batch_loss.append(forward_mm(sample, model, device, criterion, new_params))
-
-            # with torch.no_grad():
-            #     # Reset model params to initial 'theta'
-            #     reset_param_data(model, init_params)
-
-        # Sum all the losses 
-        loss = sum(batch_loss)
-
-        # dump_model_graph(loss, model)
-        optimizer.zero_grad()
-        # Backward pass
-        loss.backward()
-
-        # nn.utils.clip_grad_value_(model.parameters(), 0.5)
-        # Update theta
-        optimizer.step()
-        sched.step()
-
-        epoch_mean_loss.append(loss.cpu().detach().item())
-        print("Epoch: {}/{} Outer loss: {} loss(avg): {}".format(epoch + 1, epochs, loss.cpu().detach().item(),
-                                                                 np.mean(epoch_mean_loss)))
-
-        if (epoch + 1) % 1000 == 0:
+            # nn.utils.clip_grad_value_(model.parameters(), 0.5)
+            # Update theta
+            batch_loss = sum(batch_loss) / len(data['token'])
+            losses_train.append(batch_loss)
+            print("Epoch: {}/{} Batch outer loss: {} loss(avg): {}".format(epoch + 1, epochs, batch_loss,
+                                                                     np.mean(losses_train)))
+        epoch_mean_loss.append(np.mean(losses_train))
+        if (epoch + 1) % 2 == 0:
             save_model_dict(model, model_out_dir_, epoch + 1)
 
     return epoch_mean_loss
@@ -181,12 +150,15 @@ if __name__ == '__main__':
     out_pts = 12
     poly_deg = 5
     num_modes = 10
+    batch_size = 4
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
 
     train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
+
+    train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -206,7 +178,7 @@ if __name__ == '__main__':
     criterion_cls = nn.CrossEntropyLoss()
 
     # Training
-    losses_train = train(model, train_ds, device, [criterion_reg, criterion_cls], model_out_dir)
+    losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls], model_out_dir)
 
     train_ds.close_hf()
 
