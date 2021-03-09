@@ -7,7 +7,7 @@ import time
 import torch
 from torchviz import make_dot
 
-sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
+sys.path.append('../../datasets/nuScenes/nuscenes-devkit/python-sdk')
 from nuscenes.eval.prediction.compute_metrics import compute_metrics
 
 
