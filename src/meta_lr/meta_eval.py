@@ -3,6 +3,7 @@ import os
 import torch
 import time
 import json
+import higher
 import numpy as np
 from tqdm import tqdm
 import torch.nn as nn
@@ -40,42 +41,34 @@ def update_param_data(model, new_params):
         params.data.copy_(new_params[name])
 
 
+# Returns closest mode to GT
 def find_closest_traj(pred, gt):
-    gt = np.expand_dims(gt, 1)
-    ade = np.sum((gt - pred) ** 2, axis=-1) ** 0.5
-    ade = np.mean(ade, axis=-1)
-    labels = torch.from_numpy(np.argmin(ade, axis=-1))
-    return labels
+    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
+    ade = torch.mean(ade, dim=-1)
+    return torch.argmin(ade, dim=-1)
 
 
-def forward_mm(data, model, device, criterion, new_params):
+def forward_mm(data, f_model, device, criterion, dopt):
     inputs = data["image"].to(device)
 
     agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
     history_window = torch.flip(data["agent_past"], [1]).to(device)
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
-    print(torch.sum(new_params[4]))
     # Inner Loop
-    for l in range(4):
-        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True,
-                                dec_params=new_params)
-        labels_h = find_closest_traj(outputs.cpu().detach().numpy(), history_window.cpu().detach().numpy()).to(device)
-        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels_h, :, :], history_window)
-        loss_cls = criterion[1](scores, labels_h)
+    for _ in range(10):
+        outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
+        labels = find_closest_traj(outputs, history_window)
+        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
+        loss_cls = criterion[1](scores, labels)
         loss = loss_reg + loss_cls
         # not all the output steps are valid, but we can filter them out from the loss using availabilities
         loss = loss * torch.unsqueeze(history_mask, 2)
         loss = loss.mean()
         print('Inner loop Loss: {:.4f}'.format(loss))
+        dopt.step(loss)
 
-        # Gradients wrt model params
-        grads = torch.autograd.grad(loss, new_params)
-
-        new_params = [(new_params[i] - 1e-4 * grads[i]) for i in range(len(new_params))]
-
-    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False,
-                            dec_params=new_params)
+    outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
 
     return outputs, scores
 
@@ -94,9 +87,9 @@ def dump_predictions(pred_out, scores, token, helper):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST4_METALR_03_07_2021_12_28_38/Epoch_10000_03_07_2021_14_32_02.pth"
-    # ds_type = 'v1.0-trainval'
-    ds_type = 'v1.0-mini'
+    model_path = model_out_dir_root + "/MOCAST4_METALR_03_08_2021_20_37_10/Epoch_1_03_09_2021_01_18_42.pth"
+    ds_type = 'v1.0-trainval'
+    # ds_type = 'v1.0-mini'
 
     in_ch = 3
     out_pts = 12
@@ -127,8 +120,7 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    model.eval()
-    torch.set_grad_enabled(False)
+    #torch.set_grad_enabled(False)
 
     val_out = []
     val_scores = []
@@ -136,9 +128,10 @@ if __name__ == '__main__':
     progress_bar = tqdm(val_dl)
 
     for data in progress_bar:
-        dec_params = model.dec_params
-        with torch.enable_grad():
-            outputs, scores = forward_mm(data, model, device, [criterion_reg, criterion_cls], dec_params)
+        model.train()
+        inner_opt = torch.optim.SGD(model.dec_parameters, lr=1e-3)
+        with higher.innerloop_ctx(model, inner_opt, track_higher_grads=False) as (fmodel, diffopt):
+            outputs, scores = forward_mm(data, fmodel, device, [criterion_reg, criterion_cls], diffopt)
         val_out.extend(outputs.cpu().numpy())
         val_scores.extend(scores.cpu().numpy())
         val_tokens.extend(data["token"])
@@ -155,7 +148,6 @@ if __name__ == '__main__':
     config = load_prediction_config(pred_helper, '../../config/eval_metric_config.json')
     print("[Eval] MOCAST4 metrics")
     eval_metrics('../../out/mocast4_preds.json', pred_helper, config, '../../out/mocast4_metrics.json')
-    exit()
 
     '''############################ Qualitative ###########################################'''
     for i in np.random.randint(0, len(val_out), 20):

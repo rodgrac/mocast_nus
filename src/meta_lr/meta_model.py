@@ -101,14 +101,14 @@ class MOCAST4_METALR(nn.Module):
                 out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
                 out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
 
-        if self.sm:
+        if self.sm and not hist:
             # Testing
             # Pick top N modes
             (_, top_idx) = torch.topk(conf, 10)
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
-            return torch.stack((out_x, out_y), dim=3), self.sm(conf)
+            return torch.stack((out_x, out_y), dim=3).detach(), self.sm(conf).detach()
         else:
             # Training
             return torch.stack((out_x, out_y), dim=3), conf
