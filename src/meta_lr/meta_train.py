@@ -66,7 +66,7 @@ def forward_mm(data, f_model, device, criterion, dopt):
     target_mask = data['mask_future'].to(device)
 
     # Inner GD Loop
-    for _ in range(1):
+    for _ in range(4):
         # Train loss on history
         outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
         labels = find_closest_traj(outputs, history_window)
@@ -92,18 +92,18 @@ def forward_mm(data, f_model, device, criterion, dopt):
 
     qry_loss.backward()
 
-    return qry_loss.detach()
+    return qry_loss.detach().cpu().numpy()
 
 
 def train(model, train_dl, device, criterion, model_out_dir_):
     # ==== TRAIN LOOP
-    epochs = 10
-    meta_optim = torch.optim.Adam(model.parameters(), 1e-3)
+    epochs = 3
+    meta_optim = torch.optim.Adam(model.parameters(), 1e-4)
 
     # torch.autograd.set_detect_anomaly(True)
 
-    # sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
-    #                                             steps_per_epoch=1)
+    sched = torch.optim.lr_scheduler.OneCycleLR(meta_optim, 1e-3, epochs=epochs,
+                                                 steps_per_epoch=len(train_dl))
     # sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
     epoch_mean_loss = []
@@ -115,31 +115,34 @@ def train(model, train_dl, device, criterion, model_out_dir_):
             model.train()
             torch.set_grad_enabled(True)
 
-            batch_loss = []
-            inner_opt = torch.optim.SGD(model.parameters(), lr=1e-2)
+            query_loss = []
+
+            inner_opt = torch.optim.SGD(model.dec_parameters, lr=1e-3)
 
             # Inner loop
             for b in range(len(data['token'])):
                 print("Sample {}:".format(b))
                 sample = get_batch_sample(data, b)
 
-                with torch.backends.cudnn.flags(enabled=False):
-                    with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
-                        # Gradient descent on history and evaluated on future to get updated params phi
-                        batch_loss.append(forward_mm(sample, fmodel, device, criterion, diffopt))
-
-            meta_optim.step()
-            meta_optim.zero_grad()
+                #with torch.backends.cudnn.flags(enabled=False):
+                with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
+                    # Gradient descent on history and evaluated on future to get updated params phi
+                    query_loss.append(forward_mm(sample, fmodel, device, criterion, diffopt))
 
             # nn.utils.clip_grad_value_(model.parameters(), 0.5)
-            # Update theta
-            batch_loss = sum(batch_loss) / len(data['token'])
-            losses_train.append(batch_loss)
-            print("Epoch: {}/{} Batch outer loss: {} loss(avg): {}".format(epoch + 1, epochs, batch_loss,
-                                                                     np.mean(losses_train)))
-        epoch_mean_loss.append(np.mean(losses_train))
-        if (epoch + 1) % 2 == 0:
-            save_model_dict(model, model_out_dir_, epoch + 1)
+
+            meta_optim.step()
+            sched.step()
+            meta_optim.zero_grad()
+
+            avg_batch_loss = sum(query_loss) / len(data['token'])
+
+            losses_train.append(avg_batch_loss)
+            print("Epoch: {}/{} Batch outer loss: {} loss(avg): {}".format(epoch + 1, epochs, avg_batch_loss,
+                                                                           np.mean(losses_train)))
+        epoch_mean_loss.extend(losses_train)
+        # if (epoch + 1) == 0:
+        save_model_dict(model, model_out_dir_, epoch + 1)
 
     return epoch_mean_loss
 
@@ -150,7 +153,7 @@ if __name__ == '__main__':
     out_pts = 12
     poly_deg = 5
     num_modes = 10
-    batch_size = 4
+    batch_size = 1
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -160,7 +163,7 @@ if __name__ == '__main__':
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes).to(device)
 

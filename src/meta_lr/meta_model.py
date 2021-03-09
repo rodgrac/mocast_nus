@@ -41,6 +41,12 @@ class MOCAST4_METALR(nn.Module):
 
         self.final_fc3 = nn.Linear(in_features=256, out_features=self.out_pts)
 
+        self.dec_parameters = [
+            {'params': self.final_fc1.parameters()},
+            {'params': self.final_fc2.parameters()},
+            {'params': self.final_fc3.parameters()}
+        ]
+
         # Legendre Orthogonal basis matrix
         self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
 

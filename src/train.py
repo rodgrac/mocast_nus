@@ -16,12 +16,11 @@ from nusc_dataloader import NuScenes_HDF
 # torch.set_printoptions(profile="full")
 
 
+# Returns closest mode to GT
 def find_closest_traj(pred, gt):
-    gt = np.expand_dims(gt, 1)
-    ade = np.sum((gt - pred) ** 2, axis=-1) ** 0.5
-    ade = np.mean(ade, axis=-1)
-    labels = torch.from_numpy(np.argmin(ade, axis=-1))
-    return labels
+    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
+    ade = torch.mean(ade, dim=-1)
+    return torch.argmin(ade, dim=-1)
 
 
 def forward_mm(data, model, device, criterion):
@@ -37,7 +36,7 @@ def forward_mm(data, model, device, criterion):
     # Forward pass
     outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
 
-    labels = find_closest_traj(outputs.cpu().detach().numpy(), targets.cpu().detach().numpy()).to(device)
+    labels = find_closest_traj(outputs, targets)
 
     loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
     loss_cls = criterion[1](scores, labels)
@@ -94,7 +93,7 @@ train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1
 
 train_dl = DataLoader(train_ds, shuffle=True, batch_size=16, num_workers=16)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
 model = MOCAST_4(3, 12, 5, 10, 16, dec='polytr').to(device)
 
