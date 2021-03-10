@@ -72,12 +72,9 @@ def forward_mm(data, f_model, device, criterion, dopt, it):
     # Inner GD Loop
     for _ in range(4):
         # Train loss on history
-        outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
-        labels = find_closest_traj(outputs, history_window)
-        # Regression + Classification loss
-        spt_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
-        spt_loss_cls = criterion[1](scores, labels)
-        spt_loss = spt_loss_reg + spt_loss_cls
+        spt_outputs, _ = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
+        # Regression loss
+        spt_loss = criterion[0](spt_outputs, history_window.unsqueeze(1).repeat(1, 10, 1, 1))
         # not all the output steps are valid, so apply mask to ignore invalid ones
         spt_loss = spt_loss * torch.unsqueeze(history_mask, 2)
         spt_loss = spt_loss.mean()
@@ -87,10 +84,10 @@ def forward_mm(data, f_model, device, criterion, dopt, it):
         dopt.step(spt_loss)
 
     # Evaluate loss on targets
-    outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
-    labels = find_closest_traj(outputs, targets)
-    qry_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
-    qry_loss_cls = criterion[1](scores, labels)
+    qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
+    labels = find_closest_traj(qry_outputs, targets)
+    qry_loss_reg = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, :, :], targets)
+    qry_loss_cls = criterion[1](qry_scores, labels)
     qry_loss = qry_loss_reg + qry_loss_cls
     qry_loss = qry_loss * torch.unsqueeze(target_mask, 2)
     qry_loss = qry_loss.mean()
