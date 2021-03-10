@@ -207,7 +207,7 @@ class MOCAST_4(nn.Module):
             self.tmat = ((self.tmat - tmat_min) / (tmat_max - tmat_min))
             self.tmat = self.tmat - self.tmat[:, 2].unsqueeze(1)
 
-    def forward(self, x, device, state=None, state_len=None):
+    def forward(self, x, device, state=None, state_len=None, hist=False):
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
         if not self.sm:
@@ -242,8 +242,12 @@ class MOCAST_4(nn.Module):
 
         if self.dec in ['poly', 'ortho']:
             self.tmat = self.tmat.to(device)
-            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
-            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
+            if hist:
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
+            else:
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
         elif self.dec == 'polytr':
             t_n_offset = self.t_n.unsqueeze(0).repeat(x.size(0), 1) - eval_pt.unsqueeze(-1)
             self.tmat = torch.stack([t_n_offset ** i for i in range(self.degree, -1, -1)], dim=1)
@@ -257,29 +261,15 @@ class MOCAST_4(nn.Module):
             out = torch.ifft(out, 1, normalized=True)
             out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
 
-        if self.sm:
+        if self.sm and not hist:
             (_, top_idx) = torch.topk(conf, 10)
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
             out = torch.gather(out, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out.size(2)))
-            return torch.stack((out_x, out_y), dim=3), self.sm(conf), out
+            return torch.stack((out_x, out_y), dim=3).detach(), self.sm(conf).detach(), out.detach()
         else:
             return torch.stack((out_x, out_y), dim=3), conf
-
-
-    def test_opt(self, coeffs, hist=True):
-        if self.dec in ['dct', 'fftc']:
-            print("Test time opt not supported. Skipping...")
-            return None
-        if hist:
-            pred_x = torch.matmul(coeffs[:, :, :self.degree + 1], self.tmat[:, :7]).requires_grad_(True)
-            pred_y = torch.matmul(coeffs[:, :, self.degree + 1:], self.tmat[:, :7]).requires_grad_(True)
-        else:
-            pred_x = torch.matmul(coeffs[:, :, :self.degree + 1], self.tmat).requires_grad_(False)
-            pred_y = torch.matmul(coeffs[:, :, self.degree + 1:], self.tmat).requires_grad_(False)
-
-        return torch.stack((pred_x, pred_y), dim=3)
 
 
 # Multimodal Regression | DecLSTM | PolyFit
