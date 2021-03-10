@@ -104,9 +104,9 @@ if __name__ == '__main__':
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
-    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='polytr').to(device)
+    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     model_out_dir = os.path.join(model_out_dir_root,
                                      model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
