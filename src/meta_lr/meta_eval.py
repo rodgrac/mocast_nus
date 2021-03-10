@@ -55,8 +55,13 @@ def forward_mm(data, f_model, device, criterion, dopt):
     history_window = torch.flip(data["agent_past"], [1]).to(device)
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
+    # Future points
+    targets = data["agent_future"].to(device)
+    targets = torch.cat((history_window, targets), dim=1)
+    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
+
     # Inner Loop
-    for _ in range(10):
+    for _ in range(4):
         outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
         labels = find_closest_traj(outputs, history_window)
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
@@ -69,6 +74,13 @@ def forward_mm(data, f_model, device, criterion, dopt):
         dopt.step(loss)
 
     outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
+    labels = find_closest_traj(outputs, targets)
+    qry_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
+    qry_loss_cls = criterion[1](scores, labels)
+    qry_loss = qry_loss_reg + qry_loss_cls
+    qry_loss = qry_loss * torch.unsqueeze(target_mask, 2)
+
+    print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
 
     return outputs, scores
 
@@ -87,9 +99,9 @@ def dump_predictions(pred_out, scores, token, helper):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST4_METALR_03_08_2021_20_37_10/Epoch_1_03_09_2021_01_18_42.pth"
-    ds_type = 'v1.0-trainval'
-    # ds_type = 'v1.0-mini'
+    model_path = model_out_dir_root + "/MOCAST4_METALR_03_09_2021_13_07_41/Epoch_5_03_10_2021_11_11_41.pth"
+    # ds_type = 'v1.0-trainval'
+    ds_type = 'v1.0-mini'
 
     in_ch = 3
     out_pts = 12
@@ -106,7 +118,7 @@ if __name__ == '__main__':
 
     val_dl = DataLoader(val_ds, shuffle=True, batch_size=1)
 
-    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes, train=False).to(device)
 
@@ -156,24 +168,39 @@ if __name__ == '__main__':
         fig, ax = plt.subplots(1, 1)
         ax.grid(b=None)
         ax.imshow(img)
-        ax.plot(gt_cord[:, 0],
-                gt_cord[:, 1],
-                'w--o',
-                linewidth=4,
-                markersize=3,
+        ax.plot(gt_cord[:7, 0],
+                gt_cord[:7, 1],
+                'w--^',
+                linewidth=3,
+                markersize=2,
                 zorder=650,
-                path_effects=[pe.Stroke(linewidth=5, foreground='r'), pe.Normal()])
+                path_effects=[pe.Stroke(linewidth=4, foreground='g'), pe.Normal()])
+        ax.plot(gt_cord[7:, 0],
+                gt_cord[7:, 1],
+                'w--o',
+                linewidth=3,
+                markersize=2,
+                zorder=650,
+                path_effects=[pe.Stroke(linewidth=4, foreground='g'), pe.Normal()])
 
         top_3 = np.argsort(val_scores[i])[-1:-4:-1]
         for ind in top_3:
             pred_cord = render_trajectories(pred_helper, val_tokens[i], val_out[i][ind])
-            ax.plot(pred_cord[:, 0],
-                    pred_cord[:, 1],
-                    'w--o',
-                    linewidth=4,
-                    markersize=3,
+
+            ax.plot(pred_cord[:7, 0],
+                    pred_cord[:7, 1],
+                    'w--^',
+                    linewidth=3,
+                    markersize=2,
                     zorder=650,
-                    path_effects=[pe.Stroke(linewidth=5, foreground='b'), pe.Normal()])
+                    path_effects=[pe.Stroke(linewidth=4, foreground='b'), pe.Normal()])
+            ax.plot(pred_cord[7:, 0],
+                    pred_cord[7:, 1],
+                    'w--o',
+                    linewidth=3,
+                    markersize=2,
+                    zorder=650,
+                    path_effects=[pe.Stroke(linewidth=4, foreground='b'), pe.Normal()])
             plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
     #
     plt.show()
