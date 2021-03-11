@@ -13,7 +13,7 @@ import torch.fft
 
 # Multimodal Regression | PolyFit | MetaLR
 class MOCAST4_METALR(nn.Module):
-    def __init__(self, in_ch, out_frames, degree, modes, train=True):
+    def __init__(self, in_ch, out_frames, degree, modes):
         super().__init__()
         self.degree = degree
         self.modes = modes
@@ -50,12 +50,9 @@ class MOCAST4_METALR(nn.Module):
         # Legendre Orthogonal basis matrix
         self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
 
-        if train:
-            self.sm = None
-        else:
-            self.sm = nn.Softmax(dim=1)
+        self.sm = nn.Softmax(dim=1)
 
-    def forward(self, x, device, state=None, state_len=None, hist=False):
+    def forward(self, x, device, state=None, state_len=None, out_type=3):
         self.tmat = self.tmat.to(device)
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
@@ -90,18 +87,18 @@ class MOCAST4_METALR(nn.Module):
         conf = out[:, :, -1]
         out = out[:, :, :(self.degree + 1) * 2].clone()
 
-        if hist:
+        # out_type: 0 (history); 1 (future); 2 (both_train); 3 (both_eval)
+        if out_type == 0:
             out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
             out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
+        elif out_type == 1:
+            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
+            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
         else:
-            if self.sm:
-                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
-                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
-            else:
-                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
-                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
+            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
+            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
 
-        if self.sm and not hist:
+        if out_type == 3:
             # Testing
             # Pick top N modes
             (_, top_idx) = torch.topk(conf, 10)

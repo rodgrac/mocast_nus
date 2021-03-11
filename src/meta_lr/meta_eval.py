@@ -15,7 +15,7 @@ import matplotlib.patheffects as pe
 from meta_lr.meta_model import MOCAST4_METALR
 from nusc_dataloader import NuScenes_HDF
 from render_prediction import render_map, render_trajectories
-from utils import eval_metrics
+from utils import eval_metrics, find_closest_traj
 
 sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
 
@@ -28,27 +28,7 @@ from nuscenes.prediction.helper import convert_local_coords_to_global
 NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
 
 
-def clone_model_param(model):
-    new_param = {}
-    for name, params in model.named_parameters():
-        new_param[name] = params.clone()
-
-    return new_param
-
-
-def update_param_data(model, new_params):
-    for name, params in model.named_parameters():
-        params.data.copy_(new_params[name])
-
-
-# Returns closest mode to GT
-def find_closest_traj(pred, gt):
-    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
-    ade = torch.mean(ade, dim=-1)
-    return torch.argmin(ade, dim=-1)
-
-
-def forward_mm(data, f_model, device, criterion, dopt):
+def forward_mm(data, f_model, device, criterion, dopt, in_steps):
     inputs = data["image"].to(device)
 
     agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
@@ -57,32 +37,34 @@ def forward_mm(data, f_model, device, criterion, dopt):
 
     # Future points
     targets = data["agent_future"].to(device)
-    targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
+    target_mask = data['mask_future'].to(device)
 
     # Inner Loop
-    for _ in range(4):
-        outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
+    for _ in range(in_steps):
+        # Train loss on history
+        outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=0)
         labels = find_closest_traj(outputs, history_window)
-        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
-        loss_cls = criterion[1](scores, labels)
-        loss = loss_reg + loss_cls
-        # not all the output steps are valid, but we can filter them out from the loss using availabilities
-        loss = loss * torch.unsqueeze(history_mask, 2)
-        loss = loss.mean()
-        print('Inner loop Loss: {:.4f}'.format(loss))
-        dopt.step(loss)
+        # Regression + Classification loss
+        spt_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
+        spt_loss_cls = criterion[1](scores, labels)
+        spt_loss = spt_loss_reg + spt_loss_cls
+        # not all the output steps are valid, so apply mask to ignore invalid ones
+        spt_loss = spt_loss * torch.unsqueeze(history_mask, 2)
+        spt_loss = spt_loss.mean()
 
-    outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
-    labels = find_closest_traj(outputs, targets)
-    qry_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
-    qry_loss_cls = criterion[1](scores, labels)
+        dopt.step(spt_loss)
+
+    # Query loss evaluated only on future
+    qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=3)
+    labels = find_closest_traj(qry_outputs[:, :, 7:, :], targets)
+    qry_loss_reg = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, 7:, :], targets)
+    qry_loss_cls = criterion[1](qry_scores, labels)
     qry_loss = qry_loss_reg + qry_loss_cls
     qry_loss = qry_loss * torch.unsqueeze(target_mask, 2)
 
-    print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
+    # print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
 
-    return outputs, scores
+    return qry_outputs, qry_scores, qry_loss.mean().detach()
 
 
 def dump_predictions(pred_out, scores, token, helper):
@@ -96,6 +78,26 @@ def dump_predictions(pred_out, scores, token, helper):
     return pred_class.serialize()
 
 
+def eval(model, val_dl, device, criterion, inner_steps):
+    val_out_ = []
+    val_scores_ = []
+    val_tokens_ = []
+    val_losses_ = []
+    progress_bar = tqdm(val_dl)
+    model.train()
+
+    for data in progress_bar:
+        inner_opt = torch.optim.SGD(model.dec_parameters, lr=1e-3)
+        with higher.innerloop_ctx(model, inner_opt, track_higher_grads=False) as (fmodel, diffopt):
+            outputs, scores, val_loss = forward_mm(data, fmodel, device, criterion, diffopt, inner_steps)
+        val_out_.extend(outputs.cpu().numpy())
+        val_scores_.extend(scores.cpu().numpy())
+        val_tokens_.extend(data["token"])
+        val_losses_.append(val_loss.cpu().numpy())
+
+    return val_out_, val_scores_, val_tokens_, val_losses_
+
+
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
@@ -107,6 +109,7 @@ if __name__ == '__main__':
     out_pts = 12
     poly_deg = 5
     num_modes = 10
+    inner_steps_ = 5
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
@@ -120,7 +123,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes, train=False).to(device)
+    model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes).to(device)
 
     # if torch.cuda.device_count() > 1:
     #     # print("Using", torch.cuda.device_count(), "GPUs!")
@@ -132,23 +135,15 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    #torch.set_grad_enabled(False)
+    # torch.set_grad_enabled(False)
 
-    val_out = []
-    val_scores = []
-    val_tokens = []
-    progress_bar = tqdm(val_dl)
-
-    for data in progress_bar:
-        model.train()
-        inner_opt = torch.optim.SGD(model.dec_parameters, lr=1e-3)
-        with higher.innerloop_ctx(model, inner_opt, track_higher_grads=False) as (fmodel, diffopt):
-            outputs, scores = forward_mm(data, fmodel, device, [criterion_reg, criterion_cls], diffopt)
-        val_out.extend(outputs.cpu().numpy())
-        val_scores.extend(scores.cpu().numpy())
-        val_tokens.extend(data["token"])
+    # Eval function
+    val_out, val_scores, val_tokens, val_losses = eval(model, val_dl, device, [criterion_reg, criterion_cls],
+                                                       inner_steps_)
 
     val_ds.close_hf()
+
+    print("Avg val loss: {:.4f}".format(np.mean(val_losses)))
 
     model_preds = []
     for output, score, token in zip(val_out, val_scores, val_tokens):

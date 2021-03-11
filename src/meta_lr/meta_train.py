@@ -16,27 +16,15 @@ import matplotlib.pyplot as plt
 sys.path.append('../')
 
 from utils import dump_model_graph
-from utils import save_model_dict
+from utils import save_model_dict, find_closest_traj
 
 from meta_lr.meta_model import MOCAST4_METALR
 from nusc_dataloader import NuScenes_HDF
+from meta_lr.meta_eval import eval
 
 
 # Prints whole tensor for debug
 # torch.set_printoptions(profile="full")
-
-def clone_model_param(model):
-    new_param = {}
-    for name, params in model.named_parameters():
-        new_param[name] = params.clone()
-
-    return new_param
-
-
-def reset_param_data(model, new_params):
-    for name, params in model.named_parameters():
-        params.data.copy_(new_params[name].data)
-
 
 def get_batch_sample(data, ind):
     sample = {}
@@ -47,14 +35,7 @@ def get_batch_sample(data, ind):
     return sample
 
 
-# Returns closest mode to GT
-def find_closest_traj(pred, gt):
-    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
-    ade = torch.mean(ade, dim=-1)
-    return torch.argmin(ade, dim=-1)
-
-
-def forward_mm(data, f_model, device, criterion, dopt, it):
+def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
     # Raster input
     inputs = data["image"].to(device)
 
@@ -67,14 +48,18 @@ def forward_mm(data, f_model, device, criterion, dopt, it):
 
     # Future points
     targets = data["agent_future"].to(device)
-    target_mask = data['mask_future'].to(device)
+    targets = torch.cat((history_window, targets), dim=1)
+    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
 
     # Inner GD Loop
-    for _ in range(4):
+    for _ in range(in_steps):
         # Train loss on history
-        spt_outputs, _ = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=True)
-        # Regression loss
-        spt_loss = criterion[0](spt_outputs, history_window.unsqueeze(1).repeat(1, 10, 1, 1))
+        outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=0)
+        labels = find_closest_traj(outputs, history_window)
+        # Regression + Classification loss
+        spt_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
+        spt_loss_cls = criterion[1](scores, labels)
+        spt_loss = spt_loss_reg + spt_loss_cls
         # not all the output steps are valid, so apply mask to ignore invalid ones
         spt_loss = spt_loss * torch.unsqueeze(history_mask, 2)
         spt_loss = spt_loss.mean()
@@ -84,7 +69,7 @@ def forward_mm(data, f_model, device, criterion, dopt, it):
         dopt.step(spt_loss)
 
     # Evaluate loss on targets
-    qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, hist=False)
+    qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=2)
     labels = find_closest_traj(qry_outputs, targets)
     qry_loss_reg = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, :, :], targets)
     qry_loss_cls = criterion[1](qry_scores, labels)
@@ -97,9 +82,8 @@ def forward_mm(data, f_model, device, criterion, dopt, it):
     return qry_loss.detach().cpu().numpy()
 
 
-def train(model, train_dl, device, criterion, model_out_dir_):
+def train(model, train_dl, device, criterion, inner_steps):
     # ==== TRAIN LOOP
-    epochs = 5
     log_fr = 100
     meta_optim = torch.optim.Adam(model.parameters(), 1e-4)
 
@@ -109,47 +93,42 @@ def train(model, train_dl, device, criterion, model_out_dir_):
                                                 steps_per_epoch=len(train_dl))
     # sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
-    epoch_mean_loss = []
     # Outer loop
-    for epoch in range(epochs):
-        losses_train = []
-        progress_bar = tqdm(train_dl)
-        for it, data in enumerate(progress_bar):
-            model.train()
-            torch.set_grad_enabled(True)
+    epoch_train_loss = []
+    progress_bar = tqdm(train_dl)
+    for it, data in enumerate(progress_bar):
+        model.train()
+        torch.set_grad_enabled(True)
 
-            query_loss = []
+        query_loss = []
 
-            inner_opt = torch.optim.SGD(model.dec_parameters, lr=1e-3)
-
-            # Inner loop
-            for b in range(len(data['token'])):
-                if it % log_fr == 0:
-                    print("Sample {}:".format(b))
-                sample = get_batch_sample(data, b)
-
-                # with torch.backends.cudnn.flags(enabled=False):
-                with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
-                    # Gradient descent on history and evaluated on future to get updated params phi
-                    query_loss.append(forward_mm(sample, fmodel, device, criterion, diffopt, it))
-
-            # nn.utils.clip_grad_value_(model.parameters(), 0.5)
-
-            meta_optim.step()
-            sched.step()
-            meta_optim.zero_grad()
-
-            avg_batch_loss = sum(query_loss) / len(data['token'])
-
-            losses_train.append(avg_batch_loss)
+        inner_opt = torch.optim.SGD(model.dec_parameters, lr=1e-3)
+        meta_optim.zero_grad()
+        # Inner loop
+        for b in range(len(data['token'])):
             if it % log_fr == 0:
-                print("Epoch: {}/{} It: {}, Batch outer loss: {} loss(avg): {}".format(epoch + 1, epochs, it, avg_batch_loss,
-                                                                               np.mean(losses_train)))
-        epoch_mean_loss.extend(losses_train)
-        # if (epoch + 1) == 0:
-        save_model_dict(model, model_out_dir_, epoch + 1)
+                print("Sample {}:".format(b))
+            sample = get_batch_sample(data, b)
 
-    return epoch_mean_loss
+            # with torch.backends.cudnn.flags(enabled=False):
+            with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
+                # Gradient descent on history and evaluated on future to get updated params phi
+                query_loss.append(forward_mm(sample, fmodel, device, criterion, diffopt, inner_steps, it))
+
+        # nn.utils.clip_grad_value_(model.parameters(), 0.5)
+
+        meta_optim.step()
+        sched.step()
+
+        avg_batch_loss = sum(query_loss) / len(data['token'])
+
+        epoch_train_loss.append(avg_batch_loss)
+        if it % log_fr == 0:
+            print(
+                "Epoch: {}/{} Sample: {}, Sample outer loss: {:.4f}, Epoch loss(avg): {:.4f}".format(epoch + 1, epochs,
+                        it, avg_batch_loss, np.mean(epoch_train_loss)))
+
+    return epoch_train_loss
 
 
 if __name__ == '__main__':
@@ -157,11 +136,14 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=1, required=False)
     parser.add_argument("--gpu", type=int, default=0, required=False)
     args = parser.parse_args()
+
     torch.cuda.empty_cache()
     in_ch = 3
     out_pts = 12
     poly_deg = 5
     num_modes = 10
+    epochs = 5
+    inner_steps_ = 0
     batch_size = args.batch_size
 
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
@@ -170,8 +152,10 @@ if __name__ == '__main__':
                                                                                 std=[0.229, 0.224, 0.225])])
 
     train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
+    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-mini-val.h5', transform)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
+    val_dl = DataLoader(val_ds, shuffle=True, batch_size=1, num_workers=1)
 
     device = torch.device("cuda:{}".format(args.gpu) if torch.cuda.is_available() else "cpu")
 
@@ -190,12 +174,20 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    # Training
-    losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls], model_out_dir)
+    train_losses = []
+
+    for epoch in range(epochs):
+        # Training
+        train_losses.extend(train(model, train_dl, device, [criterion_reg, criterion_cls], inner_steps_))
+        save_model_dict(model, model_out_dir, epoch + 1)
+        # Validation
+        _, _, _, val_losses = eval(model, val_dl, device, [criterion_reg, criterion_cls], inner_steps_)
+        print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
 
     train_ds.close_hf()
+    val_ds.close_hf()
 
-    plt.plot(np.arange(len(losses_train)), losses_train, label="train loss")
+    plt.plot(np.arange(len(train_losses)), train_losses, label="train loss")
     plt.legend()
     plt.savefig(model_out_dir + '/loss.png')
     plt.show()
