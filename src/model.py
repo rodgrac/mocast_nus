@@ -169,7 +169,7 @@ class MOCAST_4(nn.Module):
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
         self.resnet.fc = nn.Linear(in_features=2048, out_features=448)
 
-        print("Num modes: ", self.modes)
+        print("Num modes: {}, Decoder: {}".format(self.modes, self.dec))
 
         self.state_fc = nn.Linear(in_features=5, out_features=64)
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)

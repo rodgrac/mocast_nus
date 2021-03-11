@@ -104,13 +104,13 @@ if __name__ == '__main__':
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     model_out_dir = os.path.join(model_out_dir_root,
                                      model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
-
+    print("Model out directory:", model_out_dir)
     # Create model out directory
     if not os.path.exists(model_out_dir):
         os.makedirs(model_out_dir)
@@ -120,10 +120,6 @@ if __name__ == '__main__':
 
     # Training
     losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls], model_out_dir)
-
-    time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
-    torch.save(model.state_dict(), '../models/' + model.__class__.__name__ + time_string + '.pth')
-    print("Saved model as ../models/" + model.__class__.__name__ + time_string + '.pth')
 
     train_ds.close_hf()
 
