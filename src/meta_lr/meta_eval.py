@@ -64,7 +64,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
 
     # print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
 
-    return qry_outputs, qry_scores, qry_loss.mean().detach()
+    return qry_outputs, model.sm(qry_scores), qry_loss.mean().detach()
 
 
 def dump_predictions(pred_out, scores, token, helper):

@@ -105,7 +105,7 @@ class MOCAST4_METALR(nn.Module):
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
-            return torch.stack((out_x, out_y), dim=3).detach(), self.sm(conf).detach()
+            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach()
         else:
             # Training
             return torch.stack((out_x, out_y), dim=3), conf
