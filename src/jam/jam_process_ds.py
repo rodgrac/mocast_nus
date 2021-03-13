@@ -1,6 +1,8 @@
 import sys
 import h5py
 import numpy as np
+from pyquaternion import Quaternion
+from scipy.stats import binned_statistic
 import matplotlib.pyplot as plt
 
 sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
@@ -14,12 +16,57 @@ from nuscenes.prediction.input_representation.static_layers import StaticLayerRa
 from nuscenes.prediction.input_representation.agents import AgentBoxesWithFadedHistory
 from nuscenes.prediction.input_representation.interface import InputRepresentation
 from nuscenes.prediction.input_representation.combinators import Rasterizer
+from nuscenes.prediction.input_representation.utils import convert_to_pixel_coords, get_rotation_matrix
+from nuscenes.prediction.helper import quaternion_yaw
+
+vehicle_filter = ['vehicle.car', 'vehicle.construction', 'vehicle.motorcycle', 'vehicle.trailer',
+                  'vehicle.truck', 'vehicle.bus.bendy', 'vehicle.bus.rigid', 'vehicle.emergency.ambulance',
+                  'vehicle.emergency.police']
+visibility_filter = ['1', '2', '3', '4']
 
 
-def get_ego_state_hist(sample_annot, helper, past_xy):
+def agent_list_filtering(inst_token, sample_token):
+    annots_new = []
+    agent_annots = helper.get_annotations_for_sample(sample_token)
+    ego_annot = helper.get_sample_annotation(inst_token, sample_token)
+    for annot in agent_annots:
+        if annot["instance_token"] != inst_token and annot["category_name"] in vehicle_filter \
+                and annot['visibility_token'] in visibility_filter:
+            agent_pixel_cord = convert_to_pixel_coords(annot['translation'][:2], ego_annot['translation'][:2],
+                                                       (400, 400), 0.1)
+
+            ego_agent_yaw = quaternion_yaw(Quaternion(ego_annot['rotation']))
+            rotation_mat = get_rotation_matrix((800, 800, 3), ego_agent_yaw)
+            agent_pixel_cord = rotation_mat @ np.append((agent_pixel_cord[1], agent_pixel_cord[0]), 1)
+
+            if int(agent_pixel_cord[0]) in range(800) and int(agent_pixel_cord[1]) in range(800):
+                pos = np.zeros(2)
+                pos[0] = binned_statistic(agent_pixel_cord[1], agent_pixel_cord[1], bins=16, range=[0, 800])[2][0] - 1
+                pos[1] = binned_statistic(agent_pixel_cord[0], agent_pixel_cord[0], bins=16, range=[0, 800])[2][0] - 1
+                annot['grid_pos'] = pos
+                annots_new.append(annot)
+
+    return annots_new
+
+
+def get_agent_state_hist(sample_annot, helper):
     state_vec = np.zeros((5, 7), dtype=np.float)
     vel, acc, yawr = [], [], []
     hist_annot = [sample_annot] + helper._iterate(sample_annot, 3, 'prev')
+
+    past_xy = helper.get_past_for_agent(sample_annot['instance_token'], sample_annot['sample_token'], seconds=3,
+                                        in_agent_frame=True)
+    if not past_xy.size:
+        past_xy = [[0, 0]]
+    else:
+        past_xy = np.concatenate(([[0, 0]], past_xy), axis=0)
+    hist_steps = len(past_xy)
+    past_xy = np.pad(past_xy, ((0, 7 - hist_steps), (0, 0)), 'constant')
+
+    # No agent state if no history
+    if not np.sum(past_xy):
+        return state_vec.T, 0, past_xy
+
     for h in hist_annot:
         temp = helper.get_velocity_for_agent(h['instance_token'], h['sample_token'])
         if not np.isnan(temp):
@@ -33,43 +80,58 @@ def get_ego_state_hist(sample_annot, helper, past_xy):
         if not np.isnan(temp):
             yawr.append(temp)
 
-    if acc:
-        state_vec[0, :len(acc)] = np.flip(past_xy[:len(acc), 0])
-        state_vec[1, :len(acc)] = np.flip(past_xy[:len(acc), 1])
-        state_vec[2, :len(acc)] = np.flip(vel[:len(acc)])
-        state_vec[3, :len(acc)] = np.flip(np.array(acc))
-        state_vec[4, :len(acc)] = np.flip(yawr[:len(acc)])
+    state_vec[0, :] = np.flip(past_xy[:, 0])
+    state_vec[1, :] = np.flip(past_xy[:, 1])
+    state_vec[2, :len(vel)] = np.flip(np.array(vel))
+    state_vec[3, :len(acc)] = np.flip(np.array(acc))
+    state_vec[4, :len(yawr)] = np.flip(np.array(yawr))
 
-    return state_vec.T, len(acc)
+    return state_vec.T, hist_steps, past_xy
 
-
-def get_agents_state_hist(sample_annot, helper):
-    agents_state_vec = []
-    return np.array(agents_state_vec)
 
 def process_annot(sample, helper, input_rep, grps):
     global count, total_c
-    print('Processing {}/{}'.format(count, total_c-1))
+    print('Processing {}/{}'.format(count, total_c - 1))
     try:
         dict = {}
+        agents_state_vec = []
+        agents_seq_len = []
+        agents_grid_pos = []
         instance_token, sample_token = sample.split("_")
-        sample_ann = helper.get_sample_annotation(instance_token, sample_token)
-        img = input_rep.make_input_representation(instance_token, sample_token)
+        ego_ann = helper.get_sample_annotation(instance_token, sample_token)
+        img = input_rep.make_input_representation(instance_token, sample_token, input_type=0, resize=jam_rep)
 
+        filtered_agents_ann = agent_list_filtering(instance_token, sample_token)
+
+        # # Ego vehicle
         future_xy = helper.get_future_for_agent(instance_token, sample_token, seconds=6, in_agent_frame=True)
-        past_xy = helper.get_past_for_agent(instance_token, sample_token, seconds=3, in_agent_frame=True)
-        past_xy = np.concatenate(([[0, 0]], past_xy), axis=0)
-        past_xy = np.pad(past_xy, ((0, 7 - past_xy.shape[0]), (0, 0)), 'constant')
-
-        ego_state_vec, ego_seq_len = get_ego_state_hist(sample_ann, helper, past_xy)
-        agents_state_vec, agents_seq_len = get_agents_state_hist(sample_ann, helper)
+        # Ego state
+        ego_state_vec, ego_seq_len, past_xy = get_agent_state_hist(ego_ann, helper)
         ego_past_mask = np.ones((1, ego_seq_len), dtype=np.uint8)
         ego_past_mask = np.pad(ego_past_mask, ((0, 0), (0, 7 - ego_seq_len)), 'constant')
 
+        # # Other vehicle agents
+        for ann in filtered_agents_ann:
+            state_vec, seq_len, _ = get_agent_state_hist(ann, helper)
+            if seq_len:
+                agents_state_vec.append(state_vec)
+                agents_seq_len.append(seq_len)
+                agents_grid_pos.append(ann['grid_pos'])
+
+        print("Filtered agents:", len(agents_state_vec))
+
+        # plt.imshow(img)
+        # ax = plt.gca()
+        # ax.set_xticks(np.arange(0, 225, 225 / 16))
+        # ax.set_yticks(np.arange(0, 225, 225 / 16))
+        # plt.show()
+        # exit()
+
         dict['image'] = img
         dict['ego_state'] = ego_state_vec.astype(np.float32)
-        dict['agents_state'] = agents_state_vec.astype(np.float32)
-        dict['agents_seq_len'] = agents_seq_len.astype(np.uint8)
+        dict['agents_state'] = np.array(agents_state_vec, dtype=np.float32)
+        dict['agents_seq_len'] = np.array(agents_seq_len, dtype=np.uint8)
+        dict['agents_rel_pos'] = np.array(agents_grid_pos, dtype=np.uint8)
         dict['ego_future'] = np.array(future_xy, dtype=np.float32)
         dict['ego_past'] = np.array(past_xy, dtype=np.float32)
         dict['ego_mask_past'] = ego_past_mask
@@ -113,40 +175,37 @@ def dict_to_hdf(grps_list, data_dict, count):
 
 if __name__ == "__main__":
     NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes'
-    GRPS = ['image', 'agent_state', 'agent_future', 'agent_past', 'mask_past', 'mask_future', 'token']
 
-    # ds_type = 'v1.0-mini'
-    ds_type = 'v1.0-trainval'
+    jam_rep = True
+    ds_type = 'v1.0-mini'
+    # ds_type = 'v1.0-trainval'
     helper = nuScenes_load(ds_type, NUSCENES_DATASET)
+    ds_sets = ['val']
 
-    # ----------------------------------------Train Set --------------------------------------------------------------#
-    print("Packing training set")
-    count = 0
-    train_set = get_prediction_challenge_split("train", dataroot=NUSCENES_DATASET)
-    print("Packed training set of length {}".format(len(train_set)))
-    total_c = len(train_set)
+    for s in ds_sets:
+        # ----------------------------------------Run process --------------------------------------------------------#
+        count = 0
+        if ds_type == 'v1.0-mini':
+            split_n = 'mini_' + s
+        else:
+            split_n = s
+        train_set = get_prediction_challenge_split(split_n, dataroot=NUSCENES_DATASET)
+        total_c = len(train_set)
+        print("Packing training set of samples:", total_c)
+        if jam_rep:
+            print("JAM Representation")
+            GRPS = ['image', 'ego_state', 'agents_state', 'agents_seq_len', 'agents_rel_pos', 'ego_future', 'ego_past',
+                    'ego_mask_past', 'ego_mask_future', 'token']
+            hf = h5py.File('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-{}-{}.h5'.format(ds_type, s), 'w')
+        else:
+            print("Fading representation")
+            GRPS = ['image', 'agent_state', 'agent_future', 'agent_past', 'mask_past', 'mask_future', 'token']
+            hf = h5py.File('/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-{}.h5'.format(ds_type, s), 'w')
 
-    hf = h5py.File('/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-train.h5'.format(ds_type), 'w')
-    grps = [hf.create_group(keys) for keys in GRPS]
+        grps = [hf.create_group(keys) for keys in GRPS]
 
-    results = nuScenes_process(train_set, helper, grps)
+        results = nuScenes_process(train_set, helper, grps)
 
-    print("Number of fails: {}".format(np.count_nonzero(np.array(not results))))
+        print("Number of fails: {}".format(np.count_nonzero(np.array(not results))))
 
-    hf.close()
-
-    # # ----------------------------------------Val Set ----------------------------------------------------------------#
-    print("Packing val set")
-    count = 0
-    val_set = get_prediction_challenge_split("val", dataroot=NUSCENES_DATASET)
-    print("Packed validation set of length {}".format(len(val_set)))
-    total_c = len(val_set)
-
-    hf = h5py.File('/scratch/rodney/datasets/nuScenes/processed/nuscenes-{}-val.h5'.format(ds_type), 'w')
-    grps = [hf.create_group(keys) for keys in GRPS]
-
-    results = nuScenes_process(val_set, helper, grps)
-
-    print("Number of fails: {}".format(np.count_nonzero(np.array(not results))))
-
-    hf.close()
+        hf.close()
