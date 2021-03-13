@@ -158,7 +158,7 @@ class MOCAST_3(nn.Module):
 
 # Multimodal Regression | PolyFit
 class MOCAST_4(nn.Module):
-    def __init__(self, in_ch, out_frames, degree, modes, train=True, dec='ortho'):
+    def __init__(self, in_ch, out_frames, degree, modes, dec='ortho'):
         super().__init__()
         self.degree = degree
         self.modes = modes
@@ -199,10 +199,7 @@ class MOCAST_4(nn.Module):
             elif self.dec == 'ortho':
                 self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
 
-        if train:
-            self.sm = None
-        else:
-            self.sm = nn.Softmax(dim=1)
+        self.sm = nn.Softmax(dim=1)
 
         if self.basis_norm:
             tmat_max, _ = torch.max(self.tmat, dim=1, keepdim=True)
@@ -210,7 +207,7 @@ class MOCAST_4(nn.Module):
             self.tmat = ((self.tmat - tmat_min) / (tmat_max - tmat_min))
             self.tmat = self.tmat - self.tmat[:, 2].unsqueeze(1)
 
-    def forward(self, x, device, state=None, state_len=None, hist=False):
+    def forward(self, x, device, state=None, state_len=None, out_type=2):
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
         if not self.sm:
@@ -248,7 +245,7 @@ class MOCAST_4(nn.Module):
 
         if self.dec in ['poly', 'ortho']:
             self.tmat = self.tmat.to(device)
-            if hist:
+            if out_type == 0:
                 out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
                 out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
             else:
@@ -267,15 +264,14 @@ class MOCAST_4(nn.Module):
             out = torch.ifft(out, 1, normalized=True)
             out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
 
-        if self.sm and not hist:
+        if out_type == 2:
+            return torch.stack((out_x, out_y), dim=3), conf
+        elif out_type == 3:
             (_, top_idx) = torch.topk(conf, 10)
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
-            out = torch.gather(out, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out.size(2)))
-            return torch.stack((out_x, out_y), dim=3).detach(), self.sm(conf).detach(), out.detach()
-        else:
-            return torch.stack((out_x, out_y), dim=3), conf
+            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach()
 
 
 # Multimodal Regression | DecLSTM | PolyFit

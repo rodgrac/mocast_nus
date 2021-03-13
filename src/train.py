@@ -29,7 +29,7 @@ def forward_mm(data, model, device, criterion):
     targets = torch.cat((history_window, targets), dim=1)
     target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
     # Forward pass
-    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
+    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=2)
 
     labels = find_closest_traj(outputs, targets)
 

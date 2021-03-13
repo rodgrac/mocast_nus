@@ -40,7 +40,7 @@ def forward_mm(data, model, device, optim, criterion, test_opt=False):
 
     if test_opt:
         with torch.no_grad():
-            org_model = clone_model_param(model.final_fc2)
+            org_model = clone_model_param(model.dec_fc2)
 
         model.train()
         torch.set_grad_enabled(True)
@@ -50,22 +50,19 @@ def forward_mm(data, model, device, optim, criterion, test_opt=False):
         torch.set_grad_enabled(False)
 
     with torch.no_grad():
-        outputs, scores, _ = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
+        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=3)
         labels = find_closest_traj(outputs, targets)
-
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
         loss_cls = criterion[1](scores, labels)
         loss = loss_reg + loss_cls
-        # not all the output steps are valid, but we can filter them out from the loss using availabilities
-
+        # not all the output steps are valid, apply mask to ignore invalid ones
         loss = loss * torch.unsqueeze(target_mask, 2)
-
         loss = loss.mean()
 
     if test_opt:
-        reset_param_data(model.final_fc2, org_model)
+        reset_param_data(model.dec_fc2, org_model)
 
-    return outputs, scores, loss.detach().cpu().numpy()
+    return outputs, model.sm(scores), loss.detach().cpu().numpy()
 
 
 def test_time_opt(data, fmodel, device, optim):
@@ -77,7 +74,7 @@ def test_time_opt(data, fmodel, device, optim):
     target = torch.flip(data["agent_past"], [1]).to(device)
     history_mask = (torch.flip(data['mask_past'], [1]) * weight_mask).to(device)
     for epoch in range(5):
-        output, _, = fmodel(data["image"].to(device), device, data["agent_state"].to(device), agent_seq_len, hist=True)
+        output, _ = fmodel(data["image"].to(device), device, data["agent_state"].to(device), agent_seq_len, out_type=0)
         loss = mse_loss(output, target.unsqueeze(1).repeat(1, 10, 1, 1))
         loss = loss * history_mask.unsqueeze(1).unsqueeze(3)
         loss = loss.mean()
@@ -100,22 +97,22 @@ def dump_predictions(pred_out, scores, token, helper):
 
 
 def evaluate(model, val_dl, device, criterion, test_opt=False):
-    val_out = []
-    val_scores = []
-    val_tokens = []
-    val_losses = []
+    val_out_ = []
+    val_scores_ = []
+    val_tokens_ = []
+    val_losses_ = []
 
-    optim = torch.optim.SGD(model.final_fc2.parameters(), lr=1e-2)
+    optim = torch.optim.SGD(model.dec_fc2.parameters(), lr=1e-2)
     progress_bar = tqdm(val_dl)
     for data in progress_bar:
         outputs, scores, val_loss = forward_mm(data, model, device, optim, criterion, test_opt=test_opt)
 
-        val_out.extend(outputs.cpu().numpy())
-        val_scores.extend(scores.cpu().numpy())
-        val_tokens.extend(data["token"])
-        val_losses.append(val_loss)
+        val_out_.extend(outputs.cpu().numpy())
+        val_scores_.extend(scores.cpu().numpy())
+        val_tokens_.extend(data["token"])
+        val_losses_.append(val_loss)
 
-    return val_out, val_scores, val_tokens, val_losses
+    return val_out_, val_scores_, val_tokens_, val_losses_
 
 
 if __name__ == '__main__':
@@ -142,7 +139,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
-    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, train=False, dec='ortho').to(device)
+    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path))
