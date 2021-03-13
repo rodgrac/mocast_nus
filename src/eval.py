@@ -14,7 +14,7 @@ import matplotlib.patheffects as pe
 from model import MOCAST_4
 from nusc_dataloader import NuScenes_HDF
 from render_prediction import render_map, render_trajectories
-from utils import eval_metrics
+from utils import eval_metrics, clone_model_param, reset_param_data, find_closest_traj
 
 sys.path.append('../datasets/nuScenes/nuscenes-devkit/python-sdk')
 
@@ -25,26 +25,6 @@ from nuscenes.eval.prediction.config import load_prediction_config
 from nuscenes.prediction.helper import convert_local_coords_to_global
 
 NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
-
-
-def clone_model_param(model):
-    new_param = {}
-    for name, params in model.named_parameters():
-        new_param[name] = params.clone()
-
-    return new_param
-
-
-def update_param_data(model, new_params):
-    for name, params in model.named_parameters():
-        params.data.copy_(new_params[name])
-
-
-# Returns closest mode to GT
-def find_closest_traj(pred, gt):
-    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
-    ade = torch.mean(ade, dim=-1)
-    return torch.argmin(ade, dim=-1)
 
 
 def forward_mm(data, model, device, optim, criterion, test_opt=False):
@@ -83,8 +63,7 @@ def forward_mm(data, model, device, optim, criterion, test_opt=False):
         loss = loss.mean()
 
     if test_opt:
-        update_param_data(model.final_fc2, org_model)
-
+        reset_param_data(model.final_fc2, org_model)
 
     return outputs, scores, loss.detach().cpu().numpy()
 
@@ -120,11 +99,30 @@ def dump_predictions(pred_out, scores, token, helper):
     return pred_class.serialize()
 
 
+def evaluate(model, val_dl, device, criterion, test_opt=False):
+    val_out = []
+    val_scores = []
+    val_tokens = []
+    val_losses = []
+
+    optim = torch.optim.SGD(model.final_fc2.parameters(), lr=1e-2)
+    progress_bar = tqdm(val_dl)
+    for data in progress_bar:
+        outputs, scores, val_loss = forward_mm(data, model, device, optim, criterion, test_opt=test_opt)
+
+        val_out.extend(outputs.cpu().numpy())
+        val_scores.extend(scores.cpu().numpy())
+        val_tokens.extend(data["token"])
+        val_losses.append(val_loss)
+
+    return val_out, val_scores, val_tokens, val_losses
+
+
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
     model_path = model_out_dir_root + "/MOCAST_4_03_12_2021_16_08_40/Epoch_15_03_12_2021_19_12_37.pth"
-    #ds_type = 'v1.0-trainval'
+    # ds_type = 'v1.0-trainval'
     ds_type = 'v1.0-mini'
 
     in_ch = 3
@@ -155,21 +153,9 @@ if __name__ == '__main__':
     model.eval()
     torch.set_grad_enabled(False)
 
-    val_out = []
-    val_scores = []
-    val_tokens = []
-    val_losses = []
-    optim = torch.optim.SGD(model.final_fc2.parameters(), lr=1e-2)
-    progress_bar = tqdm(val_dl)
-    for data in progress_bar:
-        outputs, scores, val_loss = forward_mm(data, model, device, optim, [criterion_reg, criterion_cls], test_opt=False)
+    val_out, val_scores, val_tokens, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
 
-        val_out.extend(outputs.cpu().numpy())
-        val_scores.extend(scores.cpu().numpy())
-        val_tokens.extend(data["token"])
-        val_losses.append(val_loss)
-
-    print("Val loss: {:.4f}".format(np.mean(val_losses)))
+    print("Avg val loss: {:.4f}".format(np.mean(val_losses)))
 
     val_ds.close_hf()
 

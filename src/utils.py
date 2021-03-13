@@ -40,7 +40,30 @@ def eval_metrics(pred_file, helper, config, out_file):
 
 
 def save_model_dict(model, out_dir, epoch):
+    # Create model out directory
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
     time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
     out_file = os.path.join(out_dir, 'Epoch_' + str(epoch) + time_string + '.pth')
     torch.save(model.state_dict(), out_file)
     print("Saved model as " + out_file)
+
+
+def clone_model_param(model):
+    new_param = {}
+    for name, params in model.named_parameters():
+        new_param[name] = params.clone()
+
+    return new_param
+
+
+def reset_param_data(model, new_params):
+    for name, params in model.named_parameters():
+        params.data.copy_(new_params[name].data)
+
+
+# Returns closest mode to GT
+def find_closest_traj(pred, gt):
+    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
+    ade = torch.mean(ade, dim=-1)
+    return torch.argmin(ade, dim=-1)
