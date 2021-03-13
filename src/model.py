@@ -175,9 +175,11 @@ class MOCAST_4(nn.Module):
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
 
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
+        self.enc_cat_fc = nn.Linear(in_features=512, out_features=512)
 
-        self.final_fc1 = nn.Linear(in_features=512, out_features=256)
-        self.final_fc2 = nn.Linear(in_features=256, out_features=256)
+        self.cls_fc = nn.Linear(in_features=512, out_features=modes)
+
+        self.dec_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU()
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
@@ -186,12 +188,12 @@ class MOCAST_4(nn.Module):
             self.t_n = self.t_n / self.t_n[-1]
 
         if self.dec in ['dct', 'fftc']:
-            self.final_fc3 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2 + 1) * self.modes))
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2) * self.modes))
         elif self.dec == 'polytr':
             self.t_n = torch.from_numpy(self.t_n)
-            self.final_fc3 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes + 1)
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes + 1)
         else:
-            self.final_fc3 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes)
             if self.dec == 'poly':
                 self.tmat = torch.from_numpy(np.vstack([self.t_n ** i for i in range(degree, -1, -1)]))
             elif self.dec == 'ortho':
@@ -228,22 +230,21 @@ class MOCAST_4(nn.Module):
 
         # out = torch.cat(self.modes * [out], dim=1).view(-1, self.modes, 128)
 
-        out = self.final_fc1(out)
+        out = self.enc_cat_fc(out)
         out = self.l_relu(out)
 
-        out = self.final_fc2(out)
+        conf = self.cls_fc(out)
+
+        out = self.dec_fc1(out)
         out = self.l_relu(out)
 
-        out = self.final_fc3(out)
+        out = self.dec_fc2(out)
 
         if self.dec == 'polytr':
             eval_pt = out[:, -1]
             out = out[:, :-1]
 
         out = out.view(x.size(0), self.modes, -1)
-
-        conf = out[:, :, -1]
-        out = out[:, :, :(self.degree + 1) * 2]
 
         if self.dec in ['poly', 'ortho']:
             self.tmat = self.tmat.to(device)
