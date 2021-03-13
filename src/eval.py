@@ -40,10 +40,23 @@ def update_param_data(model, new_params):
         params.data.copy_(new_params[name])
 
 
-def forward_mm(data, model, device, optim, test_opt=False):
+# Returns closest mode to GT
+def find_closest_traj(pred, gt):
+    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
+    ade = torch.mean(ade, dim=-1)
+    return torch.argmin(ade, dim=-1)
+
+
+def forward_mm(data, model, device, optim, criterion, test_opt=False):
     inputs = data["image"].to(device)
 
     agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
+    history_window = torch.flip(data["agent_past"], [1]).to(device)
+    history_mask = torch.flip(data['mask_past'], [1]).to(device)
+
+    targets = data["agent_future"].to(device)
+    targets = torch.cat((history_window, targets), dim=1)
+    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
 
     if test_opt:
         with torch.no_grad():
@@ -55,15 +68,25 @@ def forward_mm(data, model, device, optim, test_opt=False):
             loss_ = test_time_opt(data, model, device, optim)
         model.eval()
         torch.set_grad_enabled(False)
-        with torch.no_grad():
-            outputs, scores, _ = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
-            update_param_data(model.final_fc2, org_model)
-    else:
-        with torch.no_grad():
-            # Forward pass
-            outputs, scores, _ = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
 
-    return outputs, scores
+    with torch.no_grad():
+        outputs, scores, _ = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
+        labels = find_closest_traj(outputs, targets)
+
+        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
+        loss_cls = criterion[1](scores, labels)
+        loss = loss_reg + loss_cls
+        # not all the output steps are valid, but we can filter them out from the loss using availabilities
+
+        loss = loss * torch.unsqueeze(target_mask, 2)
+
+        loss = loss.mean()
+
+    if test_opt:
+        update_param_data(model.final_fc2, org_model)
+
+
+    return outputs, scores, loss.detach().cpu().numpy()
 
 
 def test_time_opt(data, fmodel, device, optim):
@@ -99,8 +122,8 @@ def dump_predictions(pred_out, scores, token, helper):
 
 if __name__ == '__main__':
     torch.cuda.empty_cache()
-    model_out_dir_root = '/scratch/rodney/models/nusc_sota'
-    model_path = model_out_dir_root + "/MOCAST_4_02_16_2021_04_31_20.pth"
+    model_out_dir_root = '/scratch/rodney/models/nuScenes'
+    model_path = model_out_dir_root + "/MOCAST_4_03_12_2021_16_08_40/Epoch_15_03_12_2021_19_12_37.pth"
     #ds_type = 'v1.0-trainval'
     ds_type = 'v1.0-mini'
 
@@ -117,14 +140,17 @@ if __name__ == '__main__':
     nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
     pred_helper = PredictHelper(nuscenes)
 
-    val_dl = DataLoader(val_ds, shuffle=False, batch_size=1, num_workers=1)
+    val_dl = DataLoader(val_ds, shuffle=False, batch_size=16, num_workers=16)
 
-    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, train=False, dec='ortho').to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path))
+
+    criterion_reg = nn.MSELoss(reduction="none")
+    criterion_cls = nn.CrossEntropyLoss()
 
     model.eval()
     torch.set_grad_enabled(False)
@@ -132,15 +158,18 @@ if __name__ == '__main__':
     val_out = []
     val_scores = []
     val_tokens = []
+    val_losses = []
     optim = torch.optim.SGD(model.final_fc2.parameters(), lr=1e-2)
     progress_bar = tqdm(val_dl)
-    for i, data in enumerate(progress_bar):
-        print("Sample", i)
-        outputs, scores = forward_mm(data, model, device, optim, test_opt=False)
+    for data in progress_bar:
+        outputs, scores, val_loss = forward_mm(data, model, device, optim, [criterion_reg, criterion_cls], test_opt=False)
 
         val_out.extend(outputs.cpu().numpy())
         val_scores.extend(scores.cpu().numpy())
         val_tokens.extend(data["token"])
+        val_losses.append(val_loss)
+
+    print("Val loss: {:.4f}".format(np.mean(val_losses)))
 
     val_ds.close_hf()
 

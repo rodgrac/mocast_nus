@@ -180,7 +180,7 @@ class MOCAST_4(nn.Module):
         self.final_fc2 = nn.Linear(in_features=256, out_features=256)
         self.l_relu = nn.ReLU()
 
-        self.t_n = np.arange(-3, out_frames / 2 + 0.001, 0.5, dtype=np.float32)
+        self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
 
         if not self.basis_norm:
             self.t_n = self.t_n / self.t_n[-1]
