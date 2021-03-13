@@ -72,7 +72,7 @@ def train(model, train_dataloader, device, criterion):
 
         epoch_train_loss.append(loss.detach().cpu().numpy())
         if it % log_fr == 0:
-            print("Epoch: {}/{} Batch: {} batch loss: {:.4f}, epoch loss(avg): {:.4f}".format(epoch, epochs, it,
+            print("Epoch: {}/{} Batch: {} batch loss: {:.4f}, epoch loss(avg): {:.4f}".format(epoch+1, epochs, it,
                 loss.detach().cpu().numpy(), np.mean(epoch_train_loss)))
 
     return epoch_train_loss
@@ -114,8 +114,7 @@ if __name__ == '__main__':
     for epoch in range(epochs):
         # Training
         train_losses.extend(train(model, train_dl, device, [criterion_reg, criterion_cls]))
-        if (epoch+1) % 5 == 0:
-            save_model_dict(model, model_out_dir, epoch + 1)
+        save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
         _, _, _, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
         print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
