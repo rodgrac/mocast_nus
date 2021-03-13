@@ -264,14 +264,14 @@ class MOCAST_4(nn.Module):
             out = torch.ifft(out, 1, normalized=True)
             out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
 
-        if out_type == 2:
-            return torch.stack((out_x, out_y), dim=3), conf
-        elif out_type == 3:
+        if out_type == 3:
             (_, top_idx) = torch.topk(conf, 10)
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
             return torch.stack((out_x, out_y), dim=3).detach(), conf.detach()
+        else:
+            return torch.stack((out_x, out_y), dim=3), conf
 
 
 # Multimodal Regression | DecLSTM | PolyFit
