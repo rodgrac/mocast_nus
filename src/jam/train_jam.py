@@ -48,7 +48,7 @@ def train(model, train_dataloader, device, criterion):
     # ==== TRAIN LOOP
     log_fr = 100
 
-    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), 1e-4)
 
     sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
                                                 steps_per_epoch=len(train_dataloader))
@@ -94,7 +94,7 @@ if __name__ == '__main__':
 
     train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-mini-train.h5', transform)
 
-    train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
+    train_dl = DataLoader(train_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 

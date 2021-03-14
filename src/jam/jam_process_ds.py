@@ -113,7 +113,7 @@ def process_annot(sample, helper, input_rep, grps):
         # # Other vehicle agents
         for ann in filtered_agents_ann:
             state_vec, seq_len, _ = get_agent_state_hist(ann, helper)
-            if seq_len:
+            if seq_len and (ann['grid_pos'] > -1).all():
                 agents_state_vec.append(state_vec)
                 agents_seq_len.append(seq_len)
                 agents_grid_pos.append(ann['grid_pos'])
@@ -122,10 +122,9 @@ def process_annot(sample, helper, input_rep, grps):
 
         # plt.imshow(img)
         # ax = plt.gca()
-        # ax.set_xticks(np.arange(0, 225, 225 / 16))
-        # ax.set_yticks(np.arange(0, 225, 225 / 16))
+        # ax.set_xticks(np.arange(0, 225, 225 / 14))
+        # ax.set_yticks(np.arange(0, 225, 225 / 14))
         # plt.show()
-        # exit()
 
         dict['image'] = img
         dict['ego_state'] = ego_state_vec.astype(np.float32)

@@ -15,6 +15,7 @@ class ResNetConv_512(nn.Module):
         return self.features(x)
 
 
+
 class JAM_TFR(nn.Module):
     def __init__(self, in_ch, out_frames, degree, modes):
         super().__init__()
@@ -35,9 +36,17 @@ class JAM_TFR(nn.Module):
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
 
-        self.cls_fc = nn.Linear(in_features=512, out_features=modes)
+        self.enc_conv1 = nn.Conv2d(1024+64, 512, kernel_size=3, stride=1, padding=1, bias=False)
+        self.enc_ln1 = nn.LayerNorm([512, 14, 14])
+        self.enc_act = nn.ReLU(inplace=True)
 
-        self.dec_fc1 = nn.Linear(in_features=512, out_features=256)
+        self.enc_conv2 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1, bias=False)
+        self.enc_ln2 = nn.LayerNorm([512, 7, 7])
+        self.enc_avg_pool = nn.AvgPool2d(7)
+
+        self.cls_fc = nn.Linear(in_features=512+64, out_features=modes)
+
+        self.dec_fc1 = nn.Linear(in_features=512+64, out_features=256)
         self.l_relu = nn.ReLU()
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
@@ -68,7 +77,7 @@ class JAM_TFR(nn.Module):
         lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first=True)
         return self.enc_lstm_fc(lstm_out[torch.arange(lstm_out.size(0)), state_len - 1, :])
 
-    def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos):
+    def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos, out_type=2):
         self.tmat = self.tmat.to(device)
         agents_grid_pos = agents_grid_pos.type(torch.LongTensor)
         cnn_tensor = self.resnet_strip(x)
@@ -76,9 +85,61 @@ class JAM_TFR(nn.Module):
 
         # Ego State LSTM
         ego_state = self.state_lstm(ego_state, ego_state_len, device)
+
+        if len(agents_state.size()) < 4:
+            agents_state = agents_state.unsqueeze(0)
+        if len(agents_state_len.size()) < 2:
+            agents_state_len = agents_state_len.unsqueeze(0)
+        if len(agents_grid_pos.size()) < 3:
+            agents_grid_pos = agents_grid_pos.unsqueeze(0)
         # Agents State LSTM
+        print(agents_state.shape)
         for ag in torch.arange(agents_state.size(1)):
             agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device)
             state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1], :] += agent_state
 
         out = torch.cat((cnn_tensor, state_tensor.permute(0, 3, 1, 2)), dim=1)
+
+        out = self.enc_conv1(out)
+        out = self.enc_ln1(out)
+        out = self.enc_act(out)
+
+        out = self.enc_conv2(out)
+        out = self.enc_ln2(out)
+        out = self.enc_act(out)
+
+        out = self.enc_avg_pool(out).view(out.size(0), -1)
+        out = torch.cat((out, ego_state), dim=1)
+
+        conf = self.cls_fc(out)
+
+        out = self.dec_fc1(out)
+        out = self.l_relu(out)
+
+        out = self.dec_fc2(out)
+        out = out.view(x.size(0), self.modes, -1)
+
+        out = out[:, :, :(self.degree + 1) * 2]
+
+        # out_type: 0 (history); 1 (future); 2 (both_train); 3 (both_eval)
+        if out_type == 0:
+            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
+            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
+        elif out_type == 1:
+            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
+            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
+        else:
+            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
+            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
+
+        if out_type == 3:
+            # Testing
+            # Pick top N modes
+            (_, top_idx) = torch.topk(conf, 10)
+            out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
+            out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
+            conf = torch.gather(conf, 1, top_idx)
+            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach()
+        else:
+            # Training
+            return torch.stack((out_x, out_y), dim=3), conf
