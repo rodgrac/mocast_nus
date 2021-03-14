@@ -93,10 +93,10 @@ class JAM_TFR(nn.Module):
         if len(agents_grid_pos.size()) < 3:
             agents_grid_pos = agents_grid_pos.unsqueeze(0)
         # Agents State LSTM
-        print(agents_state.shape)
-        for ag in torch.arange(agents_state.size(1)):
-            agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device)
-            state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1], :] += agent_state
+        if agents_state_len.numel():
+            for ag in torch.arange(agents_state.size(1)):
+                agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device)
+                state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1], :] += agent_state
 
         out = torch.cat((cnn_tensor, state_tensor.permute(0, 3, 1, 2)), dim=1)
 

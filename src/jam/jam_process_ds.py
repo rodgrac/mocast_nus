@@ -80,8 +80,8 @@ def get_agent_state_hist(sample_annot, helper):
         if not np.isnan(temp):
             yawr.append(temp)
 
-    state_vec[0, :] = np.flip(past_xy[:, 0])
-    state_vec[1, :] = np.flip(past_xy[:, 1])
+    state_vec[0, :hist_steps] = np.flip(past_xy[:hist_steps, 0])
+    state_vec[1, :hist_steps] = np.flip(past_xy[:hist_steps, 1])
     state_vec[2, :len(vel)] = np.flip(np.array(vel))
     state_vec[3, :len(acc)] = np.flip(np.array(acc))
     state_vec[4, :len(yawr)] = np.flip(np.array(yawr))
