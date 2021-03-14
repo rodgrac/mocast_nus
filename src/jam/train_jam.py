@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from jam.jam_model import JAM_TFR
 from nusc_dataloader import NuScenes_HDF
 from utils import save_model_dict, find_closest_traj
+from jam.jam_eval import evaluate
 
 
 # Prints whole tensor for debug
@@ -29,7 +30,7 @@ def forward_mm(data, model, device, criterion):
     target_mask = torch.cat((history_mask, data['ego_mask_future'].to(device)), dim=1)
     # Forward pass
     outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len, data["agents_state"].to(device),
-                            data['agents_seq_len'].to(device), data['agents_rel_pos'].to(device))
+                            data['agents_seq_len'].to(device), data['agents_rel_pos'].to(device), out_type=2)
 
     labels = find_closest_traj(outputs, targets)
 
@@ -93,8 +94,10 @@ if __name__ == '__main__':
                                                                                 std=[0.229, 0.224, 0.225])])
 
     train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-mini-train.h5', transform)
+    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-mini-val.h5', transform)
 
-    train_dl = DataLoader(train_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
+    train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
+    val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
@@ -116,6 +119,8 @@ if __name__ == '__main__':
         # Validation
         #_, _, _, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
         #print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
+
+    save_model_dict(model, model_out_dir, epoch + 1)
 
     train_ds.close_hf()
 

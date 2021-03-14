@@ -22,7 +22,7 @@ class JAM_TFR(nn.Module):
         self.degree = degree
         self.modes = modes
         self.basis_norm = False
-        self.out_pts = ((degree + 1) * 2) * self.modes
+        self.out_pts = ((degree + 1) * 2 + 1) * self.modes
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
@@ -44,9 +44,11 @@ class JAM_TFR(nn.Module):
         self.enc_ln2 = nn.LayerNorm([512, 7, 7])
         self.enc_avg_pool = nn.AvgPool2d(7)
 
-        self.cls_fc = nn.Linear(in_features=512+64, out_features=modes)
+        self.enc_cat_fc = nn.Linear(in_features=512+64, out_features=512)
 
-        self.dec_fc1 = nn.Linear(in_features=512+64, out_features=256)
+        # self.cls_fc = nn.Linear(in_features=512+64, out_features=modes)
+
+        self.dec_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU()
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
@@ -62,12 +64,12 @@ class JAM_TFR(nn.Module):
         self.sm = nn.Softmax(dim=1)
 
     # Variable length state LSTM
-    def state_lstm(self, state, state_len, device):
+    def state_lstm(self, state, state_len, device, out_type=2):
         enc_h_s = torch.zeros(1, state.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, state.size(0), 64).to(device)
-        # if not self.sm:
-        #     enc_h_s = nn.init.xavier_normal_(enc_h_s)
-        #     enc_c_s = nn.init.xavier_normal_(enc_c_s)
+        if out_type != 3:
+            enc_h_s = nn.init.xavier_normal_(enc_h_s)
+            enc_c_s = nn.init.xavier_normal_(enc_c_s)
         state = self.state_fc(state.float())
         state_len = torch.clamp(state_len, min=1).type(torch.LongTensor)
         state = torch.nn.utils.rnn.pack_padded_sequence(state, state_len.to('cpu'), batch_first=True,
@@ -84,7 +86,7 @@ class JAM_TFR(nn.Module):
         state_tensor = torch.zeros(cnn_tensor.size(0), cnn_tensor.size(2), cnn_tensor.size(3), 64).to(device)
 
         # Ego State LSTM
-        ego_state = self.state_lstm(ego_state, ego_state_len, device)
+        ego_state = self.state_lstm(ego_state, ego_state_len, device, out_type=out_type)
 
         if len(agents_state.size()) < 4:
             agents_state = agents_state.unsqueeze(0)
@@ -94,8 +96,8 @@ class JAM_TFR(nn.Module):
             agents_grid_pos = agents_grid_pos.unsqueeze(0)
         # Agents State LSTM
         if agents_state_len.numel():
-            for ag in torch.arange(agents_state.size(1)):
-                agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device)
+            for ag in torch.arange(agents_state_len.size(1)):
+                agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device, out_type=out_type)
                 state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1], :] += agent_state
 
         out = torch.cat((cnn_tensor, state_tensor.permute(0, 3, 1, 2)), dim=1)
@@ -110,8 +112,9 @@ class JAM_TFR(nn.Module):
 
         out = self.enc_avg_pool(out).view(out.size(0), -1)
         out = torch.cat((out, ego_state), dim=1)
+        out = self.enc_cat_fc(out)
 
-        conf = self.cls_fc(out)
+        # conf = self.cls_fc(out)
 
         out = self.dec_fc1(out)
         out = self.l_relu(out)
@@ -119,6 +122,7 @@ class JAM_TFR(nn.Module):
         out = self.dec_fc2(out)
         out = out.view(x.size(0), self.modes, -1)
 
+        conf = out[:, :, -1]
         out = out[:, :, :(self.degree + 1) * 2]
 
         # out_type: 0 (history); 1 (future); 2 (both_train); 3 (both_eval)
