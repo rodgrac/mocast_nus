@@ -9,33 +9,27 @@ from torchvision import transforms
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-from model import MOCAST_4
+from jam.jam_model import JAM_TFR
 from nusc_dataloader import NuScenes_HDF
-from utils import save_model_dict
+from utils import save_model_dict, find_closest_traj
+
 
 # Prints whole tensor for debug
 # torch.set_printoptions(profile="full")
 
-
-# Returns closest mode to GT
-def find_closest_traj(pred, gt):
-    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
-    ade = torch.mean(ade, dim=-1)
-    return torch.argmin(ade, dim=-1)
-
-
 def forward_mm(data, model, device, criterion):
     inputs = data["image"].to(device)
 
-    agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
-    history_window = torch.flip(data["agent_past"], [1]).to(device)
-    history_mask = torch.flip(data['mask_past'], [1]).to(device)
+    agent_seq_len = torch.sum(data["ego_mask_past"], dim=1).to(device)
+    history_window = torch.flip(data["ego_past"], [1]).to(device)
+    history_mask = torch.flip(data['ego_mask_past'], [1]).to(device)
 
-    targets = data["agent_future"].to(device)
+    targets = data["ego_future"].to(device)
     targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
+    target_mask = torch.cat((history_mask, data['ego_mask_future'].to(device)), dim=1)
     # Forward pass
-    outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len)
+    outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len, data["agents_state"].to(device),
+                            data['agents_seq_len'].to(device), data['agents_rel_pos'].to(device))
 
     labels = find_closest_traj(outputs, targets)
 
@@ -50,42 +44,38 @@ def forward_mm(data, model, device, criterion):
     return loss, outputs
 
 
-def train(model, train_dataloader, device, criterion, model_out_dir_):
+def train(model, train_dataloader, device, criterion):
     # ==== TRAIN LOOP
-    epochs = 15
+    log_fr = 100
+
     optimizer = torch.optim.Adam(model.parameters(), 1e-4)
 
     sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
                                                 steps_per_epoch=len(train_dataloader))
-    epoch_mean_loss = []
-    for epoch in range(epochs):
-        losses_train = []
-        progress_bar = tqdm(train_dataloader)
-        for data in progress_bar:
-            model.train()
-            torch.set_grad_enabled(True)
 
-            loss, _ = forward_mm(data, model, device, criterion)
+    epoch_train_loss = []
+    progress_bar = tqdm(train_dataloader)
+    for it, data in enumerate(progress_bar):
+        model.train()
+        torch.set_grad_enabled(True)
 
-            optimizer.zero_grad()
-            # Backward pass
-            loss.backward()
+        loss, _ = forward_mm(data, model, device, criterion)
 
-            # nn.utils.clip_grad_value_(model.parameters(), 0.1)
+        optimizer.zero_grad()
+        # Backward pass
+        loss.backward()
 
-            optimizer.step()
-            sched.step()
+        # nn.utils.clip_grad_value_(model.parameters(), 0.1)
 
-            losses_train.append(loss.cpu().detach().item())
-            progress_bar.set_description(
-                f"Epoch: {epoch + 1}/{epochs} loss: {loss.cpu().detach().item()} loss(avg): {np.mean(losses_train)}")
+        optimizer.step()
+        sched.step()
 
-        epoch_mean_loss.append(np.mean(losses_train))
+        epoch_train_loss.append(loss.detach().cpu().numpy())
+        if it % log_fr == 0:
+            print("Epoch: {}/{} Batch: {} batch loss: {:.4f}, epoch loss(avg): {:.4f}".format(epoch+1, epochs, it,
+                loss.detach().cpu().numpy(), np.mean(epoch_train_loss)))
 
-        if (epoch + 1) % 5 == 0:
-            save_model_dict(model, model_out_dir_, epoch + 1)
-
-    return epoch_mean_loss
+    return epoch_train_loss
 
 
 if __name__ == '__main__':
@@ -94,39 +84,41 @@ if __name__ == '__main__':
     out_pts = 12
     poly_deg = 5
     num_modes = 10
-    batch_size = 16
+    epochs = 15
+    batch_size = 1
+
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])])
+                                                                                std=[0.229, 0.224, 0.225])])
 
-    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-train.h5', transform)
+    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-mini-train.h5', transform)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
-    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='polytr').to(device)
+    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes).to(device)
 
     model_out_dir = os.path.join(model_out_dir_root,
-                                     model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
-
-    # Create model out directory
-    if not os.path.exists(model_out_dir):
-        os.makedirs(model_out_dir)
+                                 model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
+    print("Model out directory:", model_out_dir)
 
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
+    train_losses = []
     # Training
-    losses_train = train(model, train_dl, device, [criterion_reg, criterion_cls], model_out_dir)
-
-    time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
-    torch.save(model.state_dict(), '../models/' + model.__class__.__name__ + time_string + '.pth')
-    print("Saved model as ../models/" + model.__class__.__name__ + time_string + '.pth')
+    for epoch in range(epochs):
+        # Training
+        train_losses.extend(train(model, train_dl, device, [criterion_reg, criterion_cls]))
+        #save_model_dict(model, model_out_dir, epoch + 1)
+        # Validation
+        #_, _, _, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
+        #print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
 
     train_ds.close_hf()
 
-    plt.plot(np.arange(len(losses_train)), losses_train, label="train loss")
+    plt.plot(np.arange(len(train_losses)), train_losses, label="train loss")
     plt.legend()
     plt.show()

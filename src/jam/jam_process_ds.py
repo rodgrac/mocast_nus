@@ -41,8 +41,8 @@ def agent_list_filtering(inst_token, sample_token):
 
             if int(agent_pixel_cord[0]) in range(800) and int(agent_pixel_cord[1]) in range(800):
                 pos = np.zeros(2)
-                pos[0] = binned_statistic(agent_pixel_cord[1], agent_pixel_cord[1], bins=16, range=[0, 800])[2][0] - 1
-                pos[1] = binned_statistic(agent_pixel_cord[0], agent_pixel_cord[0], bins=16, range=[0, 800])[2][0] - 1
+                pos[0] = binned_statistic(agent_pixel_cord[1], agent_pixel_cord[1], bins=14, range=[0, 800])[2][0] - 1
+                pos[1] = binned_statistic(agent_pixel_cord[0], agent_pixel_cord[0], bins=14, range=[0, 800])[2][0] - 1
                 annot['grid_pos'] = pos
                 annots_new.append(annot)
 
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     ds_type = 'v1.0-mini'
     # ds_type = 'v1.0-trainval'
     helper = nuScenes_load(ds_type, NUSCENES_DATASET)
-    ds_sets = ['val']
+    ds_sets = ['train', 'val']
 
     for s in ds_sets:
         # ----------------------------------------Run process --------------------------------------------------------#

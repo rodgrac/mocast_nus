@@ -9,17 +9,18 @@ import torch.nn.functional as f
 class ResNetConv_512(nn.Module):
     def __init__(self, org_model):
         super(ResNetConv_512, self).__init__()
-        self.features = nn.Sequential(*list(org_model.children())[:-2])
+        self.features = nn.Sequential(*list(org_model.children())[:-3])
 
     def forward(self, x):
         return self.features(x)
 
 
 class JAM_TFR(nn.Module):
-    def __init__(self, in_ch, out_frames, degree, modes, train=True):
+    def __init__(self, in_ch, out_frames, degree, modes):
         super().__init__()
         self.degree = degree
         self.modes = modes
+        self.basis_norm = False
         self.out_pts = ((degree + 1) * 2) * self.modes
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
@@ -58,7 +59,6 @@ class JAM_TFR(nn.Module):
         # if not self.sm:
         #     enc_h_s = nn.init.xavier_normal_(enc_h_s)
         #     enc_c_s = nn.init.xavier_normal_(enc_c_s)
-
         state = self.state_fc(state.float())
         state_len = torch.clamp(state_len, min=1).type(torch.LongTensor)
         state = torch.nn.utils.rnn.pack_padded_sequence(state, state_len.to('cpu'), batch_first=True,
@@ -70,16 +70,15 @@ class JAM_TFR(nn.Module):
 
     def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos):
         self.tmat = self.tmat.to(device)
-
+        agents_grid_pos = agents_grid_pos.type(torch.LongTensor)
         cnn_tensor = self.resnet_strip(x)
-        state_tensor = torch.zeros(cnn_tensor.size(0), cnn_tensor.size(2), cnn_tensor.size(3), 64)
+        state_tensor = torch.zeros(cnn_tensor.size(0), cnn_tensor.size(2), cnn_tensor.size(3), 64).to(device)
 
         # Ego State LSTM
         ego_state = self.state_lstm(ego_state, ego_state_len, device)
-
         # Agents State LSTM
-        for ag in range(agents_state.size(0)):
-            state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, 0], agents_grid_pos[:, 1], :] = self.state_lstm(
-                agents_state[ag], agents_state_len[ag], device)
+        for ag in torch.arange(agents_state.size(1)):
+            agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device)
+            state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1], :] += agent_state
 
         out = torch.cat((cnn_tensor, state_tensor.permute(0, 3, 1, 2)), dim=1)
