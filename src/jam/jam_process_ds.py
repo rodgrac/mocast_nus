@@ -90,13 +90,10 @@ def get_agent_state_hist(sample_annot, helper):
 
 
 def process_annot(sample, helper, input_rep, grps):
-    global count, total_c
+    global count, total_c, max_agents
     print('Processing {}/{}'.format(count, total_c - 1))
     try:
         dict = {}
-        agents_state_vec = []
-        agents_seq_len = []
-        agents_grid_pos = []
         instance_token, sample_token = sample.split("_")
         ego_ann = helper.get_sample_annotation(instance_token, sample_token)
         img = input_rep.make_input_representation(instance_token, sample_token, input_type=0, resize=jam_rep)
@@ -111,14 +108,19 @@ def process_annot(sample, helper, input_rep, grps):
         ego_past_mask = np.pad(ego_past_mask, ((0, 0), (0, 7 - ego_seq_len)), 'constant')
 
         # # Other vehicle agents
+        agents_state_vec = np.zeros((max_agents, 7, 5), dtype=np.float32)
+        agents_seq_len = np.zeros(max_agents, dtype=np.uint8)
+        agents_grid_pos = np.zeros((max_agents, 2), dtype=np.uint8)
+        num_agents = 0
         for ann in filtered_agents_ann:
             state_vec, seq_len, _ = get_agent_state_hist(ann, helper)
             if seq_len and (ann['grid_pos'] > -1).all():
-                agents_state_vec.append(state_vec)
-                agents_seq_len.append(seq_len)
-                agents_grid_pos.append(ann['grid_pos'])
+                agents_state_vec[num_agents] = state_vec
+                agents_seq_len[num_agents] = seq_len
+                agents_grid_pos[num_agents] = ann['grid_pos']
+                num_agents += 1
 
-        print("Filtered agents:", len(agents_state_vec))
+        print("Filtered agents:", num_agents)
 
         # plt.imshow(img)
         # ax = plt.gca()
@@ -128,9 +130,10 @@ def process_annot(sample, helper, input_rep, grps):
 
         dict['image'] = img
         dict['ego_state'] = ego_state_vec.astype(np.float32)
-        dict['agents_state'] = np.array(agents_state_vec, dtype=np.float32)
-        dict['agents_seq_len'] = np.array(agents_seq_len, dtype=np.uint8)
-        dict['agents_rel_pos'] = np.array(agents_grid_pos, dtype=np.uint8)
+        dict['num_agents'] = np.array(num_agents, dtype=np.uint8)
+        dict['agents_state'] = agents_state_vec
+        dict['agents_seq_len'] = agents_seq_len
+        dict['agents_rel_pos'] = agents_grid_pos
         dict['ego_future'] = np.array(future_xy, dtype=np.float32)
         dict['ego_past'] = np.array(past_xy, dtype=np.float32)
         dict['ego_mask_past'] = ego_past_mask
@@ -179,7 +182,8 @@ if __name__ == "__main__":
     ds_type = 'v1.0-mini'
     # ds_type = 'v1.0-trainval'
     helper = nuScenes_load(ds_type, NUSCENES_DATASET)
-    ds_sets = ['train', 'val']
+    ds_sets = ['val']
+    max_agents = 31
 
     for s in ds_sets:
         # ----------------------------------------Run process --------------------------------------------------------#

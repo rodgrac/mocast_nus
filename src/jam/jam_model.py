@@ -88,17 +88,10 @@ class JAM_TFR(nn.Module):
         # Ego State LSTM
         ego_state = self.state_lstm(ego_state, ego_state_len, device, out_type=out_type)
 
-        if len(agents_state.size()) < 4:
-            agents_state = agents_state.unsqueeze(0)
-        if len(agents_state_len.size()) < 2:
-            agents_state_len = agents_state_len.unsqueeze(0)
-        if len(agents_grid_pos.size()) < 3:
-            agents_grid_pos = agents_grid_pos.unsqueeze(0)
         # Agents State LSTM
-        if agents_state_len.numel():
-            for ag in torch.arange(agents_state_len.size(1)):
-                agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device, out_type=out_type)
-                state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1], :] += agent_state
+        for ag in torch.arange(agents_state_len.size(1)):
+            agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device, out_type=out_type)
+            state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1], :] += agent_state
 
         out = torch.cat((cnn_tensor, state_tensor.permute(0, 3, 1, 2)), dim=1)
 

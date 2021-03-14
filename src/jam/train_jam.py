@@ -21,9 +21,9 @@ from jam.jam_eval import evaluate
 def forward_mm(data, model, device, criterion):
     inputs = data["image"].to(device)
 
-    agent_seq_len = torch.sum(data["ego_mask_past"], dim=1).to(device)
-    history_window = torch.flip(data["ego_past"], [1]).to(device)
-    history_mask = torch.flip(data['ego_mask_past'], [1]).to(device)
+    agent_seq_len = torch.sum(data["ego_mask_past"].to(device), dim=1)
+    history_window = torch.flip(data["ego_past"].to(device), [1])
+    history_mask = torch.flip(data['ego_mask_past'].to(device), [1])
 
     targets = data["ego_future"].to(device)
     targets = torch.cat((history_window, targets), dim=1)
@@ -47,7 +47,7 @@ def forward_mm(data, model, device, criterion):
 
 def train(model, train_dataloader, device, criterion):
     # ==== TRAIN LOOP
-    log_fr = 100
+    log_fr = 47
 
     optimizer = torch.optim.SGD(model.parameters(), 1e-4)
 
@@ -72,9 +72,8 @@ def train(model, train_dataloader, device, criterion):
         sched.step()
 
         epoch_train_loss.append(loss.detach().cpu().numpy())
-        if it % log_fr == 0:
-            print("Epoch: {}/{} Batch: {} batch loss: {:.4f}, epoch loss(avg): {:.4f}".format(epoch+1, epochs, it,
-                loss.detach().cpu().numpy(), np.mean(epoch_train_loss)))
+
+    print("Epoch: {}/{} epoch loss(avg): {:.4f}".format(epoch + 1, epochs, np.mean(epoch_train_loss)))
 
     return epoch_train_loss
 
@@ -86,7 +85,7 @@ if __name__ == '__main__':
     poly_deg = 5
     num_modes = 10
     epochs = 15
-    batch_size = 1
+    batch_size = 16
 
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
 
@@ -115,10 +114,10 @@ if __name__ == '__main__':
     for epoch in range(epochs):
         # Training
         train_losses.extend(train(model, train_dl, device, [criterion_reg, criterion_cls]))
-        #save_model_dict(model, model_out_dir, epoch + 1)
+        # save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
-        #_, _, _, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
-        #print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
+        _, _, _, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
+        print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
 
     save_model_dict(model, model_out_dir, epoch + 1)
 

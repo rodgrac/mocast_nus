@@ -120,8 +120,8 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_03_14_2021_13_13_48'
-    model_path = model_out_dir + "/Epoch_15_03_14_2021_13_26_16.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_03_14_2021_17_04_39'
+    model_path = model_out_dir + "/Epoch_15_03_14_2021_17_07_00.pth"
     # ds_type = 'v1.0-trainval'
     ds_type = 'v1.0-mini'
 
