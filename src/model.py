@@ -173,13 +173,13 @@ class MOCAST_4(nn.Module):
 
         self.state_fc = nn.Linear(in_features=5, out_features=64)
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
-
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
-        self.enc_cat_fc = nn.Linear(in_features=512, out_features=512)
 
-        self.cls_fc = nn.Linear(in_features=512, out_features=modes)
+        #self.enc_cat_fc = nn.Linear(in_features=512, out_features=512)
 
-        self.dec_fc1 = nn.Linear(in_features=512, out_features=256)
+        #self.cls_fc = nn.Linear(in_features=512, out_features=modes)
+
+        self.final_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU()
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
@@ -193,7 +193,7 @@ class MOCAST_4(nn.Module):
             self.t_n = torch.from_numpy(self.t_n)
             self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes + 1)
         else:
-            self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes)
+            self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
             if self.dec == 'poly':
                 self.tmat = torch.from_numpy(np.vstack([self.t_n ** i for i in range(degree, -1, -1)]))
             elif self.dec == 'ortho':
@@ -207,10 +207,10 @@ class MOCAST_4(nn.Module):
             self.tmat = ((self.tmat - tmat_min) / (tmat_max - tmat_min))
             self.tmat = self.tmat - self.tmat[:, 2].unsqueeze(1)
 
-    def forward(self, x, device, state=None, state_len=None, out_type=2):
+    def forward(self, x, device, state=None, state_len=None, out_type=2, eval=False):
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
-        if not self.sm:
+        if not eval:
             enc_h_s = nn.init.xavier_normal_(enc_h_s)
             enc_c_s = nn.init.xavier_normal_(enc_c_s)
 
@@ -227,21 +227,23 @@ class MOCAST_4(nn.Module):
 
         # out = torch.cat(self.modes * [out], dim=1).view(-1, self.modes, 128)
 
-        out = self.enc_cat_fc(out)
+        # out = self.enc_cat_fc(out)
+        # out = self.l_relu(out)
+
+        # conf = self.cls_fc(out)
+
+        out = self.final_fc1(out)
         out = self.l_relu(out)
 
-        conf = self.cls_fc(out)
-
-        out = self.dec_fc1(out)
-        out = self.l_relu(out)
-
-        out = self.dec_fc2(out)
+        out = self.final_fc2(out)
 
         if self.dec == 'polytr':
             eval_pt = out[:, -1]
             out = out[:, :-1]
 
         out = out.view(x.size(0), self.modes, -1)
+        conf = out[:, :, -1]
+        out = out[:, :, :(self.degree + 1) * 2]
 
         if self.dec in ['poly', 'ortho']:
             self.tmat = self.tmat.to(device)
@@ -264,7 +266,7 @@ class MOCAST_4(nn.Module):
             out = torch.ifft(out, 1, normalized=True)
             out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
 
-        if out_type == 3:
+        if eval:
             (_, top_idx) = torch.topk(conf, 10)
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))

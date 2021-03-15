@@ -27,7 +27,7 @@ from nuscenes.prediction.helper import convert_local_coords_to_global
 NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
 
 
-def forward_mm(data, model, device, optim, criterion, test_opt=False):
+def forward_mm(data, model, device, criterion, test_opt=False):
     inputs = data["image"].to(device)
 
     agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
@@ -45,12 +45,12 @@ def forward_mm(data, model, device, optim, criterion, test_opt=False):
         model.train()
         torch.set_grad_enabled(True)
         with torch.enable_grad():
-            loss_ = test_time_opt(data, model, device, optim)
+            loss_ = test_time_opt(data, model, device)
         model.eval()
         torch.set_grad_enabled(False)
 
     with torch.no_grad():
-        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=3)
+        outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=2, eval=True)
         labels = find_closest_traj(outputs, targets)
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
         loss_cls = criterion[1](scores, labels)
@@ -65,8 +65,9 @@ def forward_mm(data, model, device, optim, criterion, test_opt=False):
     return outputs, model.sm(scores), loss.detach().cpu().numpy()
 
 
-def test_time_opt(data, fmodel, device, optim):
+def test_time_opt(data, fmodel, device):
     mse_loss = nn.MSELoss(reduction='none')
+    optim = torch.optim.SGD(model.dec_fc2.parameters(), lr=1e-2)
     agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
     weight_mask = torch.exp(torch.div(torch.arange(-6, 1, dtype=torch.float32), 4)).unsqueeze(0).repeat(
         len(data['token']), 1)
@@ -102,10 +103,9 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
     val_tokens_ = []
     val_losses_ = []
 
-    optim = torch.optim.SGD(model.dec_fc2.parameters(), lr=1e-2)
     progress_bar = tqdm(val_dl)
     for data in progress_bar:
-        outputs, scores, val_loss = forward_mm(data, model, device, optim, criterion, test_opt=test_opt)
+        outputs, scores, val_loss = forward_mm(data, model, device, criterion, test_opt=test_opt)
 
         val_out_.extend(outputs.cpu().numpy())
         val_scores_.extend(scores.cpu().numpy())
@@ -118,9 +118,9 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST_4_03_12_2021_16_08_40/Epoch_15_03_12_2021_19_12_37.pth"
-    # ds_type = 'v1.0-trainval'
-    ds_type = 'v1.0-mini'
+    model_path = model_out_dir_root + "/MOCAST_4_03_14_2021_17_40_33.pth"
+    ds_type = 'v1.0-trainval'
+    # ds_type = 'v1.0-mini'
 
     in_ch = 3
     out_pts = 12
