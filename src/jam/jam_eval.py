@@ -36,7 +36,8 @@ def forward_mm(data, model, device, criterion, test_opt=False):
 
     targets = data["ego_future"].to(device)
     targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, data['ego_mask_future'].to(device)), dim=1)
+    target_mask = data['ego_mask_future'].to(device)
+    target_mask = torch.cat((history_mask, target_mask), dim=1)
 
     # if test_opt:
     #     with torch.no_grad():
@@ -51,12 +52,14 @@ def forward_mm(data, model, device, criterion, test_opt=False):
 
     with torch.no_grad():
         outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len,
-                                data["agents_state"].to(device),
-                                data['agents_seq_len'].to(device), data['agents_rel_pos'].to(device), out_type=3)
-        labels = find_closest_traj(outputs, targets)
-        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
+                                data["agents_state"].to(device), data['agents_seq_len'].to(device),
+                                data['agents_rel_pos'].to(device), out_type=2, eval=True)
+
+        labels = find_closest_traj(outputs[:, :, 7:, :], targets[:, 7:, :])
+        loss_reg_fut = criterion[0](outputs[torch.arange(outputs.size(0)), labels, 7:, :], targets[:, 7:, :])
+        loss_reg_hist = criterion[0](outputs[:, :, :7, :], targets[:, :7, :].unsqueeze(1).repeat(1, 10, 1, 1))
         loss_cls = criterion[1](scores, labels)
-        loss = loss_reg + loss_cls
+        loss = torch.cat((loss_reg_fut, torch.mean(loss_reg_hist, dim=1)), dim=1) + loss_cls
         # not all the output steps are valid, apply mask to ignore invalid ones
         loss = loss * torch.unsqueeze(target_mask, 2)
         loss = loss.mean()
@@ -120,8 +123,8 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_03_14_2021_17_04_39'
-    model_path = model_out_dir + "/Epoch_15_03_14_2021_17_07_00.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_03_14_2021_18_32_59'
+    model_path = model_out_dir + "/Epoch_20_03_14_2021_18_36_03.pth"
     # ds_type = 'v1.0-trainval'
     ds_type = 'v1.0-mini'
 

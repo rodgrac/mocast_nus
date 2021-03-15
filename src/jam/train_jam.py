@@ -27,18 +27,20 @@ def forward_mm(data, model, device, criterion):
 
     targets = data["ego_future"].to(device)
     targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, data['ego_mask_future'].to(device)), dim=1)
+    target_mask = data['ego_mask_future'].to(device)
+    target_mask = torch.cat((history_mask, target_mask), dim=1)
     # Forward pass
     outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len, data["agents_state"].to(device),
                             data['agents_seq_len'].to(device), data['agents_rel_pos'].to(device), out_type=2)
 
-    labels = find_closest_traj(outputs, targets)
+    labels = find_closest_traj(outputs[:, :, 7:, :], targets[:, 7:, :])
 
-    loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
+    loss_reg_fut = criterion[0](outputs[torch.arange(outputs.size(0)), labels, 7:, :], targets[:, 7:, :])
+    loss_reg_hist = criterion[0](outputs[:, :, :7, :], targets[:, :7, :].unsqueeze(1).repeat(1, 10, 1, 1))
     loss_cls = criterion[1](scores, labels)
-    loss = loss_reg + loss_cls
-    # not all the output steps are valid, but we can filter them out from the loss using availabilities
+    loss = torch.cat((loss_reg_fut, torch.mean(loss_reg_hist, dim=1)), dim=1) + loss_cls
 
+    # not all the output steps are valid, but we can filter them out from the loss using availabilities
     loss = loss * torch.unsqueeze(target_mask, 2)
 
     loss = loss.mean()
@@ -49,7 +51,7 @@ def train(model, train_dataloader, device, criterion):
     # ==== TRAIN LOOP
     log_fr = 47
 
-    optimizer = torch.optim.SGD(model.parameters(), 1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
 
     sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
                                                 steps_per_epoch=len(train_dataloader))
@@ -73,7 +75,7 @@ def train(model, train_dataloader, device, criterion):
 
         epoch_train_loss.append(loss.detach().cpu().numpy())
 
-    print("Epoch: {}/{} epoch loss(avg): {:.4f}".format(epoch + 1, epochs, np.mean(epoch_train_loss)))
+    print("Epoch: {}/{} Epoch train loss(avg): {:.4f}".format(epoch + 1, epochs, np.mean(epoch_train_loss)))
 
     return epoch_train_loss
 
@@ -110,19 +112,23 @@ if __name__ == '__main__':
     criterion_cls = nn.CrossEntropyLoss()
 
     train_losses = []
+    val_losses = []
     # Training
     for epoch in range(epochs):
         # Training
-        train_losses.extend(train(model, train_dl, device, [criterion_reg, criterion_cls]))
+        train_loss = train(model, train_dl, device, [criterion_reg, criterion_cls])
+        train_losses.append(np.mean(train_loss))
         # save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
-        _, _, _, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
-        print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
+        _, _, _, val_loss = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
+        print("Epoch {}/{} Val loss: {:.4f}".format(epoch + 1, epochs, np.mean(val_loss)))
+        val_losses.append(np.mean(val_loss))
 
     save_model_dict(model, model_out_dir, epoch + 1)
 
     train_ds.close_hf()
 
-    plt.plot(np.arange(len(train_losses)), train_losses, label="train loss")
+    plt.plot(np.arange(len(train_losses)), train_losses, 'b', label="train loss")
+    plt.plot(np.arange(len(val_losses)), val_losses, 'r', label="val loss")
     plt.legend()
     plt.show()

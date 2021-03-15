@@ -15,7 +15,6 @@ class ResNetConv_512(nn.Module):
         return self.features(x)
 
 
-
 class JAM_TFR(nn.Module):
     def __init__(self, in_ch, out_frames, degree, modes):
         super().__init__()
@@ -36,7 +35,7 @@ class JAM_TFR(nn.Module):
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
 
-        self.enc_conv1 = nn.Conv2d(1024+64, 512, kernel_size=3, stride=1, padding=1, bias=False)
+        self.enc_conv1 = nn.Conv2d(1024 + 64, 512, kernel_size=3, stride=1, padding=1, bias=False)
         self.enc_ln1 = nn.LayerNorm([512, 14, 14])
         self.enc_act = nn.ReLU(inplace=True)
 
@@ -44,12 +43,12 @@ class JAM_TFR(nn.Module):
         self.enc_ln2 = nn.LayerNorm([512, 7, 7])
         self.enc_avg_pool = nn.AvgPool2d(7)
 
-        self.enc_cat_fc = nn.Linear(in_features=512+64, out_features=512)
+        # self.enc_cat_fc = nn.Linear(in_features=512+64, out_features=512)
 
-        # self.cls_fc = nn.Linear(in_features=512+64, out_features=modes)
+        #self.cls_fc = nn.Linear(in_features=512+64, out_features=modes)
 
-        self.dec_fc1 = nn.Linear(in_features=512, out_features=256)
-        self.l_relu = nn.ReLU()
+        self.dec_fc1 = nn.Linear(in_features=512 + 64, out_features=256)
+        self.l_relu = nn.ReLU(inplace=True)
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
 
@@ -64,10 +63,10 @@ class JAM_TFR(nn.Module):
         self.sm = nn.Softmax(dim=1)
 
     # Variable length state LSTM
-    def state_lstm(self, state, state_len, device, out_type=2):
+    def state_lstm(self, state, state_len, device, eval=False):
         enc_h_s = torch.zeros(1, state.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, state.size(0), 64).to(device)
-        if out_type != 3:
+        if not eval:
             enc_h_s = nn.init.xavier_normal_(enc_h_s)
             enc_c_s = nn.init.xavier_normal_(enc_c_s)
         state = self.state_fc(state.float())
@@ -79,19 +78,21 @@ class JAM_TFR(nn.Module):
         lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first=True)
         return self.enc_lstm_fc(lstm_out[torch.arange(lstm_out.size(0)), state_len - 1, :])
 
-    def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos, out_type=2):
+    def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos, out_type=2,
+                eval=False):
         self.tmat = self.tmat.to(device)
         agents_grid_pos = agents_grid_pos.type(torch.LongTensor)
         cnn_tensor = self.resnet_strip(x)
         state_tensor = torch.zeros(cnn_tensor.size(0), cnn_tensor.size(2), cnn_tensor.size(3), 64).to(device)
 
         # Ego State LSTM
-        ego_state = self.state_lstm(ego_state, ego_state_len, device, out_type=out_type)
+        ego_state = self.state_lstm(ego_state, ego_state_len, device, eval=eval)
 
         # Agents State LSTM
         for ag in torch.arange(agents_state_len.size(1)):
-            agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device, out_type=out_type)
-            state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1], :] += agent_state
+            agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device, eval=eval)
+            state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1],
+            :] += agent_state.clone()
 
         out = torch.cat((cnn_tensor, state_tensor.permute(0, 3, 1, 2)), dim=1)
 
@@ -105,9 +106,9 @@ class JAM_TFR(nn.Module):
 
         out = self.enc_avg_pool(out).view(out.size(0), -1)
         out = torch.cat((out, ego_state), dim=1)
-        out = self.enc_cat_fc(out)
+        # out = self.enc_cat_fc(out)
 
-        # conf = self.cls_fc(out)
+        #conf = self.cls_fc(out)
 
         out = self.dec_fc1(out)
         out = self.l_relu(out)
@@ -118,7 +119,7 @@ class JAM_TFR(nn.Module):
         conf = out[:, :, -1]
         out = out[:, :, :(self.degree + 1) * 2]
 
-        # out_type: 0 (history); 1 (future); 2 (both_train); 3 (both_eval)
+        # out_type: 0 (history); 1 (future); 2 (both);
         if out_type == 0:
             out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
             out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
@@ -129,7 +130,7 @@ class JAM_TFR(nn.Module):
             out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
             out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
 
-        if out_type == 3:
+        if eval:
             # Testing
             # Pick top N modes
             (_, top_idx) = torch.topk(conf, 10)

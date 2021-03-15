@@ -121,7 +121,6 @@ def process_annot(sample, helper, input_rep, grps):
                 num_agents += 1
 
         print("Filtered agents:", num_agents)
-
         # plt.imshow(img)
         # ax = plt.gca()
         # ax.set_xticks(np.arange(0, 225, 225 / 14))
@@ -142,6 +141,7 @@ def process_annot(sample, helper, input_rep, grps):
 
         dict_to_hdf(grps, dict, count)
         count += 1
+
         return True
 
     except:
@@ -179,14 +179,16 @@ if __name__ == "__main__":
     NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes'
 
     jam_rep = True
-    ds_type = 'v1.0-mini'
-    # ds_type = 'v1.0-trainval'
+    #ds_type = 'v1.0-mini'
+    ds_type = 'v1.0-trainval'
     helper = nuScenes_load(ds_type, NUSCENES_DATASET)
-    ds_sets = ['val']
-    max_agents = 31
+    ds_sets = ['train', 'val']
+    # max_agents_l = [27, 31]
+    max_agents_l = [48, 36]
 
-    for s in ds_sets:
+    for i, s in enumerate(ds_sets):
         # ----------------------------------------Run process --------------------------------------------------------#
+        max_agents = max_agents_l[i]
         count = 0
         if ds_type == 'v1.0-mini':
             split_n = 'mini_' + s
