@@ -55,11 +55,12 @@ def forward_mm(data, model, device, criterion, test_opt=False):
                                 data["agents_state"].to(device), data['agents_seq_len'].to(device),
                                 data['agents_rel_pos'].to(device), out_type=2, eval=True)
 
-        labels = find_closest_traj(outputs[:, :, 7:, :], targets[:, 7:, :])
-        loss_reg_fut = criterion[0](outputs[torch.arange(outputs.size(0)), labels, 7:, :], targets[:, 7:, :])
-        loss_reg_hist = criterion[0](outputs[:, :, :7, :], targets[:, :7, :].unsqueeze(1).repeat(1, 10, 1, 1))
+        labels = find_closest_traj(outputs, targets)
+
+        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
         loss_cls = criterion[1](scores, labels)
-        loss = torch.cat((loss_reg_fut, torch.mean(loss_reg_hist, dim=1)), dim=1) + loss_cls
+        loss = loss_reg + loss_cls
+
         # not all the output steps are valid, apply mask to ignore invalid ones
         loss = loss * torch.unsqueeze(target_mask, 2)
         loss = loss.mean()
@@ -126,8 +127,8 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_03_15_2021_23_07_55'
-    model_path = model_out_dir + "/Epoch_15_03_16_2021_00_58_35.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_03_17_2021_12_26_44'
+    model_path = model_out_dir + "/Epoch_15_03_17_2021_14_19_50.pth"
     #ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
@@ -174,7 +175,6 @@ if __name__ == '__main__':
     print("[Eval] {} metrics".format(model.__class__.__name__ ))
     eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
-    exit()
 
     for i in np.random.randint(0, len(val_out), 20):
         img = render_map(pred_helper, val_tokens[i])
@@ -182,15 +182,16 @@ if __name__ == '__main__':
         fig, ax = plt.subplots(1, 1)
         ax.grid(b=None)
         ax.imshow(img)
-        ax.plot(gt_cord[:7, 0],
-                gt_cord[:7, 1],
+        gt_n = gt_cord.shape[0]
+        ax.plot(gt_cord[:gt_n-12, 0],
+                gt_cord[:gt_n-12, 1],
                 'w--^',
                 linewidth=3,
                 markersize=2,
                 zorder=650,
                 path_effects=[pe.Stroke(linewidth=4, foreground='g'), pe.Normal()])
-        ax.plot(gt_cord[7:, 0],
-                gt_cord[7:, 1],
+        ax.plot(gt_cord[-12:, 0],
+                gt_cord[-12:, 1],
                 'w--o',
                 linewidth=3,
                 markersize=2,

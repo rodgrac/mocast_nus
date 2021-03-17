@@ -33,12 +33,11 @@ def forward_mm(data, model, device, criterion):
     outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len, data["agents_state"].to(device),
                             data['agents_seq_len'].to(device), data['agents_rel_pos'].to(device), out_type=2)
 
-    labels = find_closest_traj(outputs[:, :, 7:, :], targets[:, 7:, :])
+    labels = find_closest_traj(outputs, targets)
 
-    loss_reg_fut = criterion[0](outputs[torch.arange(outputs.size(0)), labels, 7:, :], targets[:, 7:, :])
-    loss_reg_hist = criterion[0](outputs[:, :, :7, :], targets[:, :7, :].unsqueeze(1).repeat(1, 10, 1, 1))
+    loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
     loss_cls = criterion[1](scores, labels)
-    loss = torch.cat((loss_reg_fut, torch.mean(loss_reg_hist, dim=1)), dim=1) + loss_cls
+    loss = loss_reg + loss_cls
 
     # not all the output steps are valid, but we can filter them out from the loss using availabilities
     loss = loss * torch.unsqueeze(target_mask, 2)
@@ -96,7 +95,7 @@ if __name__ == '__main__':
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 
     model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes).to(device)
 
