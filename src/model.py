@@ -175,9 +175,9 @@ class MOCAST_4(nn.Module):
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
 
-        #self.enc_cat_fc = nn.Linear(in_features=512, out_features=512)
+        # self.enc_cat_fc = nn.Linear(in_features=512+64, out_features=512)
 
-        #self.cls_fc = nn.Linear(in_features=512, out_features=modes)
+        self.cls_fc = nn.Linear(in_features=512, out_features=modes)
 
         self.final_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU()
@@ -193,7 +193,7 @@ class MOCAST_4(nn.Module):
             self.t_n = torch.from_numpy(self.t_n)
             self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes + 1)
         else:
-            self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2 + 1) * self.modes)
+            self.final_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes)
             if self.dec == 'poly':
                 self.tmat = torch.from_numpy(np.vstack([self.t_n ** i for i in range(degree, -1, -1)]))
             elif self.dec == 'ortho':
@@ -230,7 +230,7 @@ class MOCAST_4(nn.Module):
         # out = self.enc_cat_fc(out)
         # out = self.l_relu(out)
 
-        # conf = self.cls_fc(out)
+        conf = self.cls_fc(out)
 
         out = self.final_fc1(out)
         out = self.l_relu(out)
@@ -242,8 +242,8 @@ class MOCAST_4(nn.Module):
             out = out[:, :-1]
 
         out = out.view(x.size(0), self.modes, -1)
-        conf = out[:, :, -1]
-        out = out[:, :, :(self.degree + 1) * 2]
+        # conf = out[:, :, -1]
+        # out = out[:, :, :(self.degree + 1) * 2]
 
         if self.dec in ['poly', 'ortho']:
             self.tmat = self.tmat.to(device)

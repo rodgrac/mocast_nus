@@ -121,7 +121,7 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST_4_03_14_2021_17_40_33.pth"
+    model_path = model_out_dir_root + "/MOCAST_4_03_17_2021_15_32_24/Epoch_15_03_17_2021_18_35_07.pth"
     ds_type = 'v1.0-trainval'
     # ds_type = 'v1.0-mini'
 
@@ -141,7 +141,7 @@ if __name__ == '__main__':
 
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
@@ -168,23 +168,23 @@ if __name__ == '__main__':
     print("[Eval] MOCAST4 metrics")
     eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
-    exit()
 
     for i in np.random.randint(0, len(val_out), 20):
         img = render_map(pred_helper, val_tokens[i])
         gt_cord = render_trajectories(pred_helper, val_tokens[i])
+        gt_n = gt_cord.shape[0]
         fig, ax = plt.subplots(1, 1)
         ax.grid(b=None)
         ax.imshow(img)
-        ax.plot(gt_cord[:7, 0],
-                gt_cord[:7, 1],
+        ax.plot(gt_cord[:gt_n - 12, 0],
+                gt_cord[:gt_n - 12, 1],
                 'w--^',
                 linewidth=3,
                 markersize=2,
                 zorder=650,
                 path_effects=[pe.Stroke(linewidth=4, foreground='g'), pe.Normal()])
-        ax.plot(gt_cord[7:, 0],
-                gt_cord[7:, 1],
+        ax.plot(gt_cord[-12:, 0],
+                gt_cord[-12:, 1],
                 'w--o',
                 linewidth=3,
                 markersize=2,

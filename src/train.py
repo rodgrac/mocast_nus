@@ -93,7 +93,7 @@ if __name__ == '__main__':
     val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-mini-val.h5', transform)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
-    val_dl = DataLoader(val_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
+    val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
