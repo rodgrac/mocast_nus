@@ -53,12 +53,10 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
 
     # Query loss evaluated only on future
     qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=3)
-    labels = find_closest_traj(qry_outputs[:, :, 7:, :], targets[:, 7:, :])
-
-    loss_reg_fut = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, 7:, :], targets[:, 7:, :])
-    loss_reg_hist = criterion[0](qry_outputs[:, :, :7, :], targets[:, :7, :].unsqueeze(1).repeat(1, 10, 1, 1))
+    labels = find_closest_traj(qry_outputs, targets)
+    loss_reg = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, :, :], targets)
     loss_cls = criterion[1](qry_scores, labels)
-    qry_loss = torch.cat((loss_reg_fut, torch.mean(loss_reg_hist, dim=1)), dim=1) + loss_cls
+    qry_loss = loss_reg + loss_cls
     qry_loss = qry_loss * torch.unsqueeze(target_mask, 2)
 
     # print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
