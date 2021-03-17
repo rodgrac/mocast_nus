@@ -44,31 +44,28 @@ def forward_mm(data, model, device, criterion):
     return loss, outputs
 
 
-def train(model, train_dataloader, device, criterion):
+def train(model, train_dataloader, device, criterion, optim):
     # ==== TRAIN LOOP
     log_fr = 100
 
-    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
-
-    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
-                                                steps_per_epoch=len(train_dataloader))
-
     epoch_train_loss = []
     progress_bar = tqdm(train_dataloader)
-    for it, data in enumerate(progress_bar):
-        model.train()
-        torch.set_grad_enabled(True)
 
+    model.train()
+    torch.set_grad_enabled(True)
+
+    for it, data in enumerate(progress_bar):
         loss, _ = forward_mm(data, model, device, criterion)
 
-        optimizer.zero_grad()
+        optim[0].zero_grad()
         # Backward pass
         loss.backward()
 
         # nn.utils.clip_grad_value_(model.parameters(), 0.1)
 
-        optimizer.step()
-        sched.step()
+        # Optimizer and lr scheduler steps
+        optim[0].step()
+        optim[1].step()
 
         epoch_train_loss.append(loss.detach().cpu().numpy())
         if it % log_fr == 0:
@@ -98,7 +95,7 @@ if __name__ == '__main__':
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
     val_dl = DataLoader(val_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
@@ -109,15 +106,21 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
+    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
+
+    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
+                                                steps_per_epoch=len(train_dl))
+
     train_losses = []
 
     for epoch in range(epochs):
         # Training
-        train_losses.extend(train(model, train_dl, device, [criterion_reg, criterion_cls]))
-        save_model_dict(model, model_out_dir, epoch + 1)
+        train_losses.extend(train(model, train_dl, device, [criterion_reg, criterion_cls], [optimizer, sched]))
         # Validation
         _, _, _, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
-        print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
+        print("Epoch {}/{} Val loss: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
+
+    save_model_dict(model, model_out_dir, epoch + 1)
 
     train_ds.close_hf()
     val_ds.close_hf()

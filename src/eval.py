@@ -103,6 +103,9 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
     val_tokens_ = []
     val_losses_ = []
 
+    model.eval()
+    torch.set_grad_enabled(False)
+
     progress_bar = tqdm(val_dl)
     for data in progress_bar:
         outputs, scores, val_loss = forward_mm(data, model, device, criterion, test_opt=test_opt)
@@ -126,6 +129,7 @@ if __name__ == '__main__':
     out_pts = 12
     poly_deg = 5
     num_modes = 10
+    batch_size = 16
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
@@ -135,7 +139,7 @@ if __name__ == '__main__':
     nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
     pred_helper = PredictHelper(nuscenes)
 
-    val_dl = DataLoader(val_ds, shuffle=False, batch_size=16, num_workers=16)
+    val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
@@ -146,9 +150,6 @@ if __name__ == '__main__':
 
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
-
-    model.eval()
-    torch.set_grad_enabled(False)
 
     val_out, val_scores, val_tokens, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
 
