@@ -17,34 +17,35 @@ class MOCAST4_METALR(nn.Module):
         super().__init__()
         self.degree = degree
         self.modes = modes
-        self.out_pts = ((degree + 1) * 2 + 1) * self.modes
+        self.out_pts = ((degree + 1) * 2) * self.modes
         self.basis_norm = False
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
-        self.resnet.fc = nn.Linear(in_features=2048, out_features=448)
+        self.resnet.fc = nn.Linear(in_features=2048, out_features=512)
 
         print("Num modes: ", self.modes)
 
         # Agent state embedding (x, y, vel, acc, yawr)
         self.state_fc = nn.Linear(in_features=5, out_features=64)
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
-
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
 
-        self.final_fc1 = nn.Linear(in_features=512, out_features=256)
-        self.final_fc2 = nn.Linear(in_features=256, out_features=256)
+        self.cls_fc = nn.Linear(in_features=512+64, out_features=modes)
+
+        self.final_fc1 = nn.Linear(in_features=512+64, out_features=256)
+        # self.final_fc2 = nn.Linear(in_features=256, out_features=256)
         self.l_relu = nn.ReLU()
 
         self.t_n = np.arange(-3, out_frames / 2 + 0.001, 0.5, dtype=np.float32)
         self.t_n = self.t_n / self.t_n[-1]
 
-        self.final_fc3 = nn.Linear(in_features=256, out_features=self.out_pts)
+        self.final_fc2 = nn.Linear(in_features=256, out_features=self.out_pts)
 
         self.dec_parameters = [
             {'params': self.final_fc1.parameters()},
             {'params': self.final_fc2.parameters()},
-            {'params': self.final_fc3.parameters()}
+            # {'params': self.final_fc3.parameters()}
         ]
 
         # Legendre Orthogonal basis matrix
@@ -56,9 +57,9 @@ class MOCAST4_METALR(nn.Module):
         self.tmat = self.tmat.to(device)
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
-        # if not self.sm:
-        #     enc_h_s = nn.init.xavier_normal_(enc_h_s)
-        #     enc_c_s = nn.init.xavier_normal_(enc_c_s)
+        if out_type != 3:
+            enc_h_s = nn.init.xavier_normal_(enc_h_s)
+            enc_c_s = nn.init.xavier_normal_(enc_c_s)
 
         # Variable length state LSTM
         state = self.state_fc(state.float())
@@ -74,18 +75,20 @@ class MOCAST4_METALR(nn.Module):
         # Concatenate state encoding with resnet encoding
         out = torch.cat((self.resnet(x), out), dim=1)
 
+        conf = self.cls_fc(out)
+
         out = self.final_fc1(out)
         out = self.l_relu(out)
 
-        out = self.final_fc2(out)
-        out = self.l_relu(out)
+        # out = self.final_fc2(out)
+        # out = self.l_relu(out)
 
-        out = self.final_fc3(out)
+        out = self.final_fc2(out)
         # out = self.decoder(out, dec_params)
         out = out.view(x.size(0), self.modes, -1).clone()
 
-        conf = out[:, :, -1]
-        out = out[:, :, :(self.degree + 1) * 2].clone()
+        # conf = out[:, :, -1]
+        # out = out[:, :, :(self.degree + 1) * 2].clone()
 
         # out_type: 0 (history); 1 (future); 2 (both_train); 3 (both_eval)
         if out_type == 0:

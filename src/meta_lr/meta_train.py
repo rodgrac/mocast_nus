@@ -20,7 +20,7 @@ from utils import save_model_dict, find_closest_traj
 
 from meta_lr.meta_model import MOCAST4_METALR
 from nusc_dataloader import NuScenes_HDF
-from meta_lr.meta_eval import eval
+from meta_lr.meta_eval import evaluate
 
 
 # Prints whole tensor for debug
@@ -54,12 +54,10 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
     # Inner GD Loop
     for _ in range(in_steps):
         # Train loss on history
-        outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=0)
-        labels = find_closest_traj(outputs, history_window)
-        # Regression + Classification loss
-        spt_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
-        spt_loss_cls = criterion[1](scores, labels)
-        spt_loss = spt_loss_reg + spt_loss_cls
+        spt_outputs, spt_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=0)
+
+        spt_loss = criterion[0](spt_outputs, history_window.unsqueeze(1).repeat(1, 10, 1, 1))
+        spt_loss = torch.mean(spt_loss, dim=1)
         # not all the output steps are valid, so apply mask to ignore invalid ones
         spt_loss = spt_loss * torch.unsqueeze(history_mask, 2)
         spt_loss = spt_loss.mean()
@@ -70,10 +68,12 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
 
     # Evaluate loss on targets
     qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=2)
-    labels = find_closest_traj(qry_outputs, targets)
-    qry_loss_reg = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, :, :], targets)
-    qry_loss_cls = criterion[1](qry_scores, labels)
-    qry_loss = qry_loss_reg + qry_loss_cls
+    labels = find_closest_traj(qry_outputs[:, :, 7:, :], targets[:, 7:, :])
+
+    loss_reg_fut = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, 7:, :], targets[:, 7:, :])
+    loss_reg_hist = criterion[0](qry_outputs[:, :, :7, :], targets[:, :7, :].unsqueeze(1).repeat(1, 10, 1, 1))
+    loss_cls = criterion[1](qry_scores, labels)
+    qry_loss = torch.cat((loss_reg_fut, torch.mean(loss_reg_hist, dim=1)), dim=1) + loss_cls
     qry_loss = qry_loss * torch.unsqueeze(target_mask, 2)
     qry_loss = qry_loss.mean()
 
@@ -82,28 +82,22 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
     return qry_loss.detach().cpu().numpy()
 
 
-def train(model, train_dl, device, criterion, inner_steps):
+def train(model, train_dl, device, criterion, outer_optim, inner_steps):
     # ==== TRAIN LOOP
     log_fr = 100
-    meta_optim = torch.optim.Adam(model.parameters(), 1e-4)
-
     # torch.autograd.set_detect_anomaly(True)
 
-    sched = torch.optim.lr_scheduler.OneCycleLR(meta_optim, 1e-3, epochs=epochs,
-                                                steps_per_epoch=len(train_dl))
-    # sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+    model.train()
+    torch.set_grad_enabled(True)
 
     # Outer loop
     epoch_train_loss = []
     progress_bar = tqdm(train_dl)
     for it, data in enumerate(progress_bar):
-        model.train()
-        torch.set_grad_enabled(True)
-
         query_loss = []
 
-        inner_opt = torch.optim.SGD(model.dec_parameters, lr=1e-3)
-        meta_optim.zero_grad()
+        inner_opt = torch.optim.SGD(model.dec_parameters, lr=5e-3)
+        outer_optim[0].zero_grad()
         # Inner loop
         for b in range(len(data['token'])):
             if it % log_fr == 0:
@@ -117,8 +111,8 @@ def train(model, train_dl, device, criterion, inner_steps):
 
         # nn.utils.clip_grad_value_(model.parameters(), 0.5)
 
-        meta_optim.step()
-        sched.step()
+        outer_optim[0].step()
+        outer_optim[1].step()
 
         avg_batch_loss = sum(query_loss) / len(data['token'])
 
@@ -133,8 +127,8 @@ def train(model, train_dl, device, criterion, inner_steps):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", type=int, default=1, required=False)
-    parser.add_argument("--gpu", type=int, default=0, required=False)
+    parser.add_argument("--batch_size", type=int, default=16, required=False)
+    parser.add_argument("--gpu", type=int, default=1, required=False)
     args = parser.parse_args()
 
     torch.cuda.empty_cache()
@@ -143,7 +137,7 @@ if __name__ == '__main__':
     poly_deg = 5
     num_modes = 10
     epochs = 5
-    inner_steps_ = 0
+    inner_steps_ = 5
     batch_size = args.batch_size
 
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
@@ -155,7 +149,7 @@ if __name__ == '__main__':
     val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-mini-val.h5', transform)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
-    val_dl = DataLoader(val_ds, shuffle=True, batch_size=1, num_workers=1)
+    val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
     device = torch.device("cuda:{}".format(args.gpu) if torch.cuda.is_available() else "cpu")
 
@@ -174,20 +168,27 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    train_losses = []
+    meta_optim = torch.optim.Adam(model.parameters(), 1e-4)
+    sched = torch.optim.lr_scheduler.OneCycleLR(meta_optim, 1e-3, epochs=epochs,
+                                                steps_per_epoch=len(train_dl))
 
+    train_losses = []
+    val_losses = []
     for epoch in range(epochs):
         # Training
-        train_losses.extend(train(model, train_dl, device, [criterion_reg, criterion_cls], inner_steps_))
+        train_loss = train(model, train_dl, device, [criterion_reg, criterion_cls], [meta_optim, sched], inner_steps_)
+        train_losses.append(np.mean(train_loss))
         save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
-        _, _, _, val_losses = eval(model, val_dl, device, [criterion_reg, criterion_cls], inner_steps_)
+        _, _, _, val_loss = evaluate(model, val_dl, device, [criterion_reg, criterion_cls], inner_steps_)
         print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
+        val_losses.append(np.mean(val_loss))
 
     train_ds.close_hf()
     val_ds.close_hf()
 
-    plt.plot(np.arange(len(train_losses)), train_losses, label="train loss")
+    plt.plot(np.arange(len(train_losses)), train_losses, 'b', label="train loss")
+    plt.plot(np.arange(len(val_losses)), val_losses, 'r', label="val loss")
     plt.legend()
     plt.savefig(model_out_dir + '/loss.png')
     plt.show()

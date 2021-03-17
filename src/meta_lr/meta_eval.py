@@ -42,12 +42,9 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
     # Inner Loop
     for _ in range(in_steps):
         # Train loss on history
-        outputs, scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=0)
-        labels = find_closest_traj(outputs, history_window)
-        # Regression + Classification loss
-        spt_loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], history_window)
-        spt_loss_cls = criterion[1](scores, labels)
-        spt_loss = spt_loss_reg + spt_loss_cls
+        spt_outputs, spt_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=0)
+
+        spt_loss = criterion[0](spt_outputs, history_window.unsqueeze(1).repeat(1, 10, 1, 1))
         # not all the output steps are valid, so apply mask to ignore invalid ones
         spt_loss = spt_loss * torch.unsqueeze(history_mask, 2)
         spt_loss = spt_loss.mean()
@@ -56,10 +53,12 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
 
     # Query loss evaluated only on future
     qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=3)
-    labels = find_closest_traj(qry_outputs[:, :, 7:, :], targets)
-    qry_loss_reg = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, 7:, :], targets)
-    qry_loss_cls = criterion[1](qry_scores, labels)
-    qry_loss = qry_loss_reg + qry_loss_cls
+    labels = find_closest_traj(qry_outputs[:, :, 7:, :], targets[:, 7:, :])
+
+    loss_reg_fut = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, 7:, :], targets[:, 7:, :])
+    loss_reg_hist = criterion[0](qry_outputs[:, :, :7, :], targets[:, :7, :].unsqueeze(1).repeat(1, 10, 1, 1))
+    loss_cls = criterion[1](qry_scores, labels)
+    qry_loss = torch.cat((loss_reg_fut, torch.mean(loss_reg_hist, dim=1)), dim=1) + loss_cls
     qry_loss = qry_loss * torch.unsqueeze(target_mask, 2)
 
     # print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
@@ -78,7 +77,7 @@ def dump_predictions(pred_out, scores, token, helper):
     return pred_class.serialize()
 
 
-def eval(model, val_dl, device, criterion, inner_steps):
+def evaluate(model, val_dl, device, criterion, inner_steps):
     val_out_ = []
     val_scores_ = []
     val_tokens_ = []
@@ -87,7 +86,7 @@ def eval(model, val_dl, device, criterion, inner_steps):
     model.train()
 
     for data in progress_bar:
-        inner_opt = torch.optim.SGD(model.dec_parameters, lr=1e-3)
+        inner_opt = torch.optim.SGD(model.dec_parameters, lr=5e-3)
         with higher.innerloop_ctx(model, inner_opt, track_higher_grads=False) as (fmodel, diffopt):
             outputs, scores, val_loss = forward_mm(data, fmodel, device, criterion, diffopt, inner_steps)
         val_out_.extend(outputs.cpu().numpy())
@@ -138,7 +137,7 @@ if __name__ == '__main__':
     # torch.set_grad_enabled(False)
 
     # Eval function
-    val_out, val_scores, val_tokens, val_losses = eval(model, val_dl, device, [criterion_reg, criterion_cls],
+    val_out, val_scores, val_tokens, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls],
                                                        inner_steps_)
 
     val_ds.close_hf()
