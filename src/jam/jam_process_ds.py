@@ -183,7 +183,7 @@ if __name__ == "__main__":
     ds_type = 'v1.0-trainval'
     helper = nuScenes_load(ds_type, NUSCENES_DATASET)
     ds_sets = ['train', 'val']
-    # max_agents_l = [27, 31]
+    #max_agents_l = [27, 31]
     max_agents_l = [48, 36]
 
     for i, s in enumerate(ds_sets):

@@ -36,11 +36,13 @@ class JAM_TFR(nn.Module):
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
 
         self.enc_conv1 = nn.Conv2d(1024 + 64, 512, kernel_size=3, stride=1, padding=1, bias=False)
-        self.enc_ln1 = nn.LayerNorm([512, 14, 14])
+        #self.enc_ln1 = nn.LayerNorm([512, 14, 14])
+        self.enc_bn1 = nn.BatchNorm2d(512)
         self.enc_act = nn.ReLU(inplace=True)
 
         self.enc_conv2 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1, bias=False)
-        self.enc_ln2 = nn.LayerNorm([512, 7, 7])
+        #self.enc_ln2 = nn.LayerNorm([512, 7, 7])
+        self.enc_bn2 = nn.BatchNorm2d(512)
         self.enc_avg_pool = nn.AvgPool2d(7)
 
         # self.enc_cat_fc = nn.Linear(in_features=512+64, out_features=512)
@@ -97,11 +99,11 @@ class JAM_TFR(nn.Module):
         out = torch.cat((cnn_tensor, state_tensor.permute(0, 3, 1, 2)), dim=1)
 
         out = self.enc_conv1(out)
-        out = self.enc_ln1(out)
+        out = self.enc_bn1(out)
         out = self.enc_act(out)
 
         out = self.enc_conv2(out)
-        out = self.enc_ln2(out)
+        out = self.enc_bn2(out)
         out = self.enc_act(out)
 
         out = self.enc_avg_pool(out).view(out.size(0), -1)

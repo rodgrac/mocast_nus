@@ -47,35 +47,31 @@ def forward_mm(data, model, device, criterion):
     return loss, outputs
 
 
-def train(model, train_dataloader, device, criterion):
+def train(model, train_dataloader, device, criterion, optim):
     # ==== TRAIN LOOP
-    log_fr = 47
+    log_fr = 100
 
-    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
-
-    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
-                                                steps_per_epoch=len(train_dataloader))
+    model.train()
+    torch.set_grad_enabled(True)
 
     epoch_train_loss = []
     progress_bar = tqdm(train_dataloader)
     for it, data in enumerate(progress_bar):
-        model.train()
-        torch.set_grad_enabled(True)
-
         loss, _ = forward_mm(data, model, device, criterion)
 
-        optimizer.zero_grad()
+        optim[0].zero_grad()
         # Backward pass
         loss.backward()
 
         # nn.utils.clip_grad_value_(model.parameters(), 0.1)
 
-        optimizer.step()
-        sched.step()
+        optim[0].step()
+        optim[1].step()
 
         epoch_train_loss.append(loss.detach().cpu().numpy())
 
-    print("Epoch: {}/{} Epoch train loss(avg): {:.4f}".format(epoch + 1, epochs, np.mean(epoch_train_loss)))
+        if it % log_fr == 0:
+            print("Epoch: {}/{} It: {}:Epoch train loss(avg): {:.4f}".format(epoch + 1, epochs, it, np.mean(epoch_train_loss)))
 
     return epoch_train_loss
 
@@ -94,8 +90,8 @@ if __name__ == '__main__':
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
 
-    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-mini-train.h5', transform)
-    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-mini-val.h5', transform)
+    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-train.h5', transform)
+    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-val.h5', transform)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
@@ -111,22 +107,27 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
+    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
+
+    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
+                                                steps_per_epoch=len(train_dl))
+
     train_losses = []
     val_losses = []
     # Training
     for epoch in range(epochs):
         # Training
-        train_loss = train(model, train_dl, device, [criterion_reg, criterion_cls])
+        train_loss = train(model, train_dl, device, [criterion_reg, criterion_cls], [optimizer, sched])
         train_losses.append(np.mean(train_loss))
-        # save_model_dict(model, model_out_dir, epoch + 1)
+        if epoch > 10:
+            save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
         _, _, _, val_loss = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
         print("Epoch {}/{} Val loss: {:.4f}".format(epoch + 1, epochs, np.mean(val_loss)))
         val_losses.append(np.mean(val_loss))
 
-    save_model_dict(model, model_out_dir, epoch + 1)
-
     train_ds.close_hf()
+    val_ds.close_hf()
 
     plt.plot(np.arange(len(train_losses)), train_losses, 'b', label="train loss")
     plt.plot(np.arange(len(val_losses)), val_losses, 'r', label="val loss")
