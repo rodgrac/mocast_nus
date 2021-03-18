@@ -63,7 +63,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
 
     # print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
 
-    return qry_outputs, f_model.sm(qry_scores), qry_loss.mean().detach()
+    return qry_outputs, model.sm(qry_scores), qry_loss.mean().detach()
 
 
 def dump_predictions(pred_out, scores, token, helper):
@@ -100,9 +100,9 @@ def evaluate(model, val_dl, device, criterion, inner_steps):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST4_METALR_03_09_2021_13_07_41/Epoch_5_03_10_2021_11_11_41.pth"
-    # ds_type = 'v1.0-trainval'
-    ds_type = 'v1.0-mini'
+    model_path = model_out_dir_root + "/MOCAST4_METALR_03_18_2021_09_19_09/Epoch_1_03_18_2021_14_49_07.pth"
+    ds_type = 'v1.0-trainval'
+    #ds_type = 'v1.0-mini'
 
     in_ch = 3
     out_pts = 12
@@ -120,7 +120,7 @@ if __name__ == '__main__':
 
     val_dl = DataLoader(val_ds, shuffle=True, batch_size=1)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes).to(device)
 
