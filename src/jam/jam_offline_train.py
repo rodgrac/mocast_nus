@@ -3,5 +3,5 @@ import sys
 import time
 
 os.system("nohup sh -c '" +
-          sys.executable + " train_jam.py > /scratch/rodney/models/nuScenes/logs/tfrjam_mar16_bn.txt" +
+          sys.executable + " train_jam.py > /scratch/rodney/models/nuScenes/logs/tfrjam_mar18_att2_1.txt" +
                            "' &")

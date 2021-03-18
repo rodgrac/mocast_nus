@@ -21,7 +21,7 @@ class JAM_TFR(nn.Module):
         self.degree = degree
         self.modes = modes
         self.basis_norm = False
-        self.out_pts = ((degree + 1) * 2 + 1) * self.modes
+        self.out_pts = ((degree + 1) * 2) * self.modes
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
@@ -43,13 +43,15 @@ class JAM_TFR(nn.Module):
         self.enc_conv2 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1, bias=False)
         #self.enc_ln2 = nn.LayerNorm([512, 7, 7])
         self.enc_bn2 = nn.BatchNorm2d(512)
-        self.enc_avg_pool = nn.AvgPool2d(7)
+        # self.enc_avg_pool = nn.AvgPool2d(7)
 
-        # self.enc_cat_fc = nn.Linear(in_features=512+64, out_features=512)
+        self.att_linear = nn.Linear(in_features=512+64+512, out_features=1)
 
-        #self.cls_fc = nn.Linear(in_features=512+64, out_features=modes)
+        self.enc_cat_fc = nn.Linear(in_features=512+64+512, out_features=512)
 
-        self.dec_fc1 = nn.Linear(in_features=512 + 64, out_features=256)
+        self.cls_fc = nn.Linear(in_features=512, out_features=modes)
+
+        self.dec_fc1 = nn.Linear(in_features=512, out_features=256)
         self.l_relu = nn.ReLU(inplace=True)
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
@@ -63,6 +65,8 @@ class JAM_TFR(nn.Module):
         self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
 
         self.sm = nn.Softmax(dim=1)
+
+        self.dropout = nn.Dropout(p=0.5)
 
     # Variable length state LSTM
     def state_lstm(self, state, state_len, device, eval=False):
@@ -105,12 +109,26 @@ class JAM_TFR(nn.Module):
         out = self.enc_conv2(out)
         out = self.enc_bn2(out)
         out = self.enc_act(out)
+        # out = self.enc_avg_pool(out)
 
-        out = self.enc_avg_pool(out).view(out.size(0), -1)
-        out = torch.cat((out, ego_state), dim=1)
-        # out = self.enc_cat_fc(out)
+        # Attention Block
+        out = out.view(out.size(0), out.size(1), -1).clone()
+        ego_tensor = torch.cat((out[:, :, 24], ego_state), dim=1)
+        out = torch.cat((out[:, :, :24], out[:, :, 25:]), dim=2)
 
-        #conf = self.cls_fc(out)
+        att_weights = torch.zeros((out.size(0), out.size(-1)), requires_grad=True).to(device)
+
+        for grid in torch.arange(out.size(-1)):
+                att_weights[:, grid] = self.att_linear(torch.cat((out[:, :, grid], ego_tensor), dim=1)).squeeze(1)
+
+        out = torch.einsum('bfg,bw->bf', out, self.sm(att_weights))
+
+        out = torch.cat((out, ego_tensor), dim=1)
+        out = self.enc_cat_fc(out)
+
+        out = self.dropout(out)
+
+        conf = self.cls_fc(out)
 
         out = self.dec_fc1(out)
         out = self.l_relu(out)
@@ -118,8 +136,8 @@ class JAM_TFR(nn.Module):
         out = self.dec_fc2(out)
         out = out.view(x.size(0), self.modes, -1)
 
-        conf = out[:, :, -1]
-        out = out[:, :, :(self.degree + 1) * 2]
+        # conf = out[:, :, -1]
+        # out = out[:, :, :(self.degree + 1) * 2]
 
         # out_type: 0 (history); 1 (future); 2 (both);
         if out_type == 0:
