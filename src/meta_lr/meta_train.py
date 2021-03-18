@@ -135,11 +135,12 @@ if __name__ == '__main__':
     out_pts = 12
     poly_deg = 5
     num_modes = 10
-    epochs = 5
+    epochs = 3
     inner_steps_ = 5
     batch_size = args.batch_size
 
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
+    pretrained_path = '/MOCAST_4_03_17_2021_12_10_37/Epoch_15_03_17_2021_15_13_50.pth'
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
@@ -154,8 +155,12 @@ if __name__ == '__main__':
 
     model = MOCAST4_METALR(in_ch, out_pts, poly_deg, num_modes).to(device)
 
+    print('Loading pretrained model:', model_out_dir_root + pretrained_path)
+    model.load_state_dict(torch.load(model_out_dir_root + pretrained_path, map_location=device))
+
     model_out_dir = os.path.join(model_out_dir_root,
                                  model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
+
     # Create model out directory
     if not os.path.exists(model_out_dir):
         os.makedirs(model_out_dir)

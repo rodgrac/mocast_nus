@@ -37,7 +37,8 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
 
     # Future points
     targets = data["agent_future"].to(device)
-    target_mask = data['mask_future'].to(device)
+    targets = torch.cat((history_window, targets), dim=1)
+    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
 
     # Inner Loop
     for _ in range(in_steps):
@@ -45,6 +46,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
         spt_outputs, spt_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=0)
 
         spt_loss = criterion[0](spt_outputs, history_window.unsqueeze(1).repeat(1, 10, 1, 1))
+        spt_loss = torch.mean(spt_loss, dim=1)
         # not all the output steps are valid, so apply mask to ignore invalid ones
         spt_loss = spt_loss * torch.unsqueeze(history_mask, 2)
         spt_loss = spt_loss.mean()
@@ -61,7 +63,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
 
     # print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
 
-    return qry_outputs, model.sm(qry_scores), qry_loss.mean().detach()
+    return qry_outputs, f_model.sm(qry_scores), qry_loss.mean().detach()
 
 
 def dump_predictions(pred_out, scores, token, helper):

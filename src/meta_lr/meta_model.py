@@ -22,7 +22,7 @@ class MOCAST4_METALR(nn.Module):
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
-        self.resnet.fc = nn.Linear(in_features=2048, out_features=512)
+        self.resnet.fc = nn.Linear(in_features=2048, out_features=448)
 
         print("Num modes: ", self.modes)
 
@@ -31,13 +31,13 @@ class MOCAST4_METALR(nn.Module):
         self.enc_lstm = nn.LSTM(64, 64, batch_first=True)
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
 
-        self.cls_fc = nn.Linear(in_features=512+64, out_features=modes)
+        self.cls_fc = nn.Linear(in_features=512, out_features=modes)
 
-        self.final_fc1 = nn.Linear(in_features=512+64, out_features=256)
+        self.final_fc1 = nn.Linear(in_features=512, out_features=256)
         # self.final_fc2 = nn.Linear(in_features=256, out_features=256)
         self.l_relu = nn.ReLU()
 
-        self.t_n = np.arange(-3, out_frames / 2 + 0.001, 0.5, dtype=np.float32)
+        self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
         self.t_n = self.t_n / self.t_n[-1]
 
         self.final_fc2 = nn.Linear(in_features=256, out_features=self.out_pts)
