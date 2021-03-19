@@ -16,12 +16,12 @@ class ResNetConv_512(nn.Module):
 
 
 class JAM_TFR(nn.Module):
-    def __init__(self, in_ch, out_frames, degree, modes):
+    def __init__(self, in_ch, out_frames, degree, modes, dec='ortho'):
         super().__init__()
         self.degree = degree
         self.modes = modes
+        self.dec = dec
         self.basis_norm = False
-        self.out_pts = ((degree + 1) * 2) * self.modes
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
@@ -47,11 +47,11 @@ class JAM_TFR(nn.Module):
 
         self.att_linear = nn.Linear(in_features=512+64+512, out_features=1)
 
-        self.enc_cat_fc = nn.Linear(in_features=512+64+512, out_features=512)
+        #self.enc_cat_fc = nn.Linear(in_features=512+64+512, out_features=512)
 
-        self.cls_fc = nn.Linear(in_features=512, out_features=modes)
+        self.cls_fc = nn.Linear(in_features=512+64+512, out_features=modes)
 
-        self.dec_fc1 = nn.Linear(in_features=512, out_features=256)
+        self.dec_fc1 = nn.Linear(in_features=512+64+512, out_features=256)
         self.l_relu = nn.ReLU(inplace=True)
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
@@ -59,10 +59,12 @@ class JAM_TFR(nn.Module):
         if not self.basis_norm:
             self.t_n = self.t_n / self.t_n[-1]
 
-        self.dec_fc2 = nn.Linear(in_features=256, out_features=self.out_pts)
-
-        # Legendre Orthogonal basis matrix
-        self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
+        if dec == 'ortho':
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes)
+            # Legendre Orthogonal basis matrix
+            self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
+        elif dec == 'fftc':
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2) * self.modes))
 
         self.sm = nn.Softmax(dim=1)
 
@@ -86,7 +88,6 @@ class JAM_TFR(nn.Module):
 
     def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos, out_type=2,
                 eval=False):
-        self.tmat = self.tmat.to(device)
         agents_grid_pos = agents_grid_pos.type(torch.LongTensor)
         cnn_tensor = self.resnet_strip(x)
         state_tensor = torch.zeros(cnn_tensor.size(0), cnn_tensor.size(2), cnn_tensor.size(3), 64).to(device)
@@ -124,14 +125,14 @@ class JAM_TFR(nn.Module):
         out = torch.einsum('bfg,bw->bf', out, self.sm(att_weights))
 
         out = torch.cat((out, ego_tensor), dim=1)
-        out = self.enc_cat_fc(out)
-
-        out = self.dropout(out)
+        #out = self.enc_cat_fc(out)
 
         conf = self.cls_fc(out)
 
         out = self.dec_fc1(out)
         out = self.l_relu(out)
+
+        #out = self.dropout(out)
 
         out = self.dec_fc2(out)
         out = out.view(x.size(0), self.modes, -1)
@@ -139,16 +140,29 @@ class JAM_TFR(nn.Module):
         # conf = out[:, :, -1]
         # out = out[:, :, :(self.degree + 1) * 2]
 
-        # out_type: 0 (history); 1 (future); 2 (both);
-        if out_type == 0:
-            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
-            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
-        elif out_type == 1:
-            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
-            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
-        else:
-            out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
-            out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
+        if self.dec == 'ortho':
+            self.tmat = self.tmat.to(device)
+            # out_type: 0 (history); 1 (future); 2 (both);
+            if out_type == 0:
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
+            elif out_type == 1:
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, 7:])
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, 7:])
+            else:
+                out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
+                out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
+
+        elif self.dec == 'fftc':
+            out = out.view(x.size(0), self.modes, -1, 2)
+            out = torch.ifft(out, 1, normalized=True)
+            if out_type == 0:
+                out_x, out_y = out[:, :, :7, 0], out[:, :, :7, 1]
+            elif out_type == 1:
+                out_x, out_y = out[:, :, 7:, 0], out[:, :, 7:, 1]
+            else:
+                out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
+
 
         if eval:
             # Testing

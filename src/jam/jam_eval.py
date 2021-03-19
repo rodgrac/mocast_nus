@@ -127,8 +127,8 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_03_18_2021_13_04_52'
-    model_path = model_out_dir + "/Epoch_15_03_18_2021_15_02_49.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_03_19_2021_15_42_00'
+    model_path = model_out_dir + "/Epoch_15_03_19_2021_17_44_39.pth"
     #ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
@@ -148,12 +148,12 @@ if __name__ == '__main__':
 
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes).to(device)
+    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='fftc').to(device)
 
     print("Loading model ", model_path)
-    model.load_state_dict(torch.load(model_path, map_location=torch.device("cuda:1")))
+    model.load_state_dict(torch.load(model_path, map_location=torch.device(device)))
 
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()

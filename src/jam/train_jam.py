@@ -95,9 +95,9 @@ if __name__ == '__main__':
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes).to(device)
+    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='fftc').to(device)
 
     model_out_dir = os.path.join(model_out_dir_root,
                                  model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
@@ -106,7 +106,7 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=0.01)
+    optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=1e-4)
 
     sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
                                                 steps_per_epoch=len(train_dl))
@@ -118,7 +118,7 @@ if __name__ == '__main__':
         # Training
         train_loss = train(model, train_dl, device, [criterion_reg, criterion_cls], [optimizer, sched])
         train_losses.append(np.mean(train_loss))
-        if (epoch+1) > 8:
+        if (epoch+1) > 10:
             save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
         _, _, _, val_loss = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
