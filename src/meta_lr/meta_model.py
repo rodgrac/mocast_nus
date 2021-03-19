@@ -42,7 +42,14 @@ class MOCAST4_METALR(nn.Module):
 
         self.final_fc2 = nn.Linear(in_features=256, out_features=self.out_pts)
 
-        self.dec_parameters = [
+        self.inner_parameters = [
+            {'params': self.final_fc1.parameters()},
+            {'params': self.final_fc2.parameters()},
+            # {'params': self.final_fc3.parameters()}
+        ]
+
+        self.outer_parameters = [
+            {'params': self.cls_fc.parameters()},
             {'params': self.final_fc1.parameters()},
             {'params': self.final_fc2.parameters()},
             # {'params': self.final_fc3.parameters()}

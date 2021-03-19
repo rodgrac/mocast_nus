@@ -49,6 +49,9 @@ def eval_metrics(pred_file, helper, config, out_file):
 
 
 def save_model_dict(model, out_dir, epoch):
+    # Create model out directory
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
     time_string = time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime())
     out_file = os.path.join(out_dir, 'Epoch_' + str(epoch) + time_string + '.pth')
     torch.save(model.state_dict(), out_file)

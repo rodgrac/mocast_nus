@@ -83,7 +83,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
 
 def train(model, train_dl, device, criterion, outer_optim, inner_steps):
     # ==== TRAIN LOOP
-    log_fr = 100
+    log_fr = 1
     # torch.autograd.set_detect_anomaly(True)
 
     model.train()
@@ -95,7 +95,7 @@ def train(model, train_dl, device, criterion, outer_optim, inner_steps):
     for it, data in enumerate(progress_bar):
         query_loss = []
 
-        inner_opt = torch.optim.SGD(model.dec_parameters, lr=5e-3)
+        inner_opt = torch.optim.SGD(model.inner_parameters, lr=5e-3)
         outer_optim[0].zero_grad()
         # Inner loop
         for b in range(len(data['token'])):
@@ -127,7 +127,7 @@ def train(model, train_dl, device, criterion, outer_optim, inner_steps):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", type=int, default=16, required=False)
-    parser.add_argument("--gpu", type=int, default=1, required=False)
+    parser.add_argument("--gpu", type=int, default=2, required=False)
     args = parser.parse_args()
 
     torch.cuda.empty_cache()
@@ -158,12 +158,12 @@ if __name__ == '__main__':
     print('Loading pretrained model:', model_out_dir_root + pretrained_path)
     model.load_state_dict(torch.load(model_out_dir_root + pretrained_path, map_location=device))
 
+    # Freezing the encoder layers
+    for param in list(model.parameters())[:-6]:
+        param.requires_grad = False
+
     model_out_dir = os.path.join(model_out_dir_root,
                                  model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
-
-    # Create model out directory
-    if not os.path.exists(model_out_dir):
-        os.makedirs(model_out_dir)
 
     # if torch.cuda.device_count() > 1:
     #     # print("Using", torch.cuda.device_count(), "GPUs!")
@@ -172,7 +172,7 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    meta_optim = torch.optim.Adam(model.parameters(), 1e-4)
+    meta_optim = torch.optim.Adam(model.outer_parameters, 1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(meta_optim, 1e-3, epochs=epochs,
                                                 steps_per_epoch=len(train_dl))
 
@@ -185,7 +185,7 @@ if __name__ == '__main__':
         save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
         _, _, _, val_loss = evaluate(model, val_dl, device, [criterion_reg, criterion_cls], inner_steps_)
-        print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_losses)))
+        print("Epoch {}/{} VAL LOSS: {:.4f}".format(epoch + 1, epochs, np.mean(val_loss)))
         val_losses.append(np.mean(val_loss))
 
     train_ds.close_hf()

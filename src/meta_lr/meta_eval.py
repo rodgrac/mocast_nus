@@ -61,9 +61,9 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
     qry_loss = loss_reg + loss_cls
     qry_loss = qry_loss * torch.unsqueeze(target_mask, 2)
 
-    # print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
+    #print("Outer loss: {:.4f}".format(qry_loss.mean().detach().item()))
 
-    return qry_outputs, model.sm(qry_scores), qry_loss.mean().detach()
+    return qry_outputs, qry_scores, qry_loss.mean().detach()
 
 
 def dump_predictions(pred_out, scores, token, helper):
@@ -86,11 +86,11 @@ def evaluate(model, val_dl, device, criterion, inner_steps):
     model.train()
 
     for data in progress_bar:
-        inner_opt = torch.optim.SGD(model.dec_parameters, lr=5e-3)
+        inner_opt = torch.optim.SGD(model.inner_parameters, lr=5e-3)
         with higher.innerloop_ctx(model, inner_opt, track_higher_grads=False) as (fmodel, diffopt):
             outputs, scores, val_loss = forward_mm(data, fmodel, device, criterion, diffopt, inner_steps)
         val_out_.extend(outputs.cpu().numpy())
-        val_scores_.extend(scores.cpu().numpy())
+        val_scores_.extend(model.sm(scores).cpu().numpy())
         val_tokens_.extend(data["token"])
         val_losses_.append(val_loss.cpu().numpy())
 
