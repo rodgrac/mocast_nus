@@ -41,6 +41,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
     target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
 
     # Inner Loop
+    f_model.train()
     for _ in range(in_steps):
         # Train loss on history
         spt_outputs, spt_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=0)
@@ -54,6 +55,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps):
         dopt.step(spt_loss)
 
     # Query loss evaluated only on future
+    f_model.eval()
     qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=3)
     labels = find_closest_traj(qry_outputs, targets)
     loss_reg = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, :, :], targets)
@@ -83,7 +85,6 @@ def evaluate(model, val_dl, device, criterion, inner_steps):
     val_tokens_ = []
     val_losses_ = []
     progress_bar = tqdm(val_dl)
-    model.train()
 
     for data in progress_bar:
         inner_opt = torch.optim.SGD(model.inner_parameters, lr=5e-3)
@@ -100,7 +101,7 @@ def evaluate(model, val_dl, device, criterion, inner_steps):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST4_METALR_03_18_2021_09_19_09/Epoch_1_03_18_2021_14_49_07.pth"
+    model_path = model_out_dir_root + "/MOCAST4_METALR_03_18_2021_21_45_38/Epoch_3_03_19_2021_02_25_43.pth"
     ds_type = 'v1.0-trainval'
     #ds_type = 'v1.0-mini'
 
@@ -108,7 +109,7 @@ if __name__ == '__main__':
     out_pts = 12
     poly_deg = 5
     num_modes = 10
-    inner_steps_ = 5
+    inner_steps_ = 10
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
@@ -118,7 +119,7 @@ if __name__ == '__main__':
     nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
     pred_helper = PredictHelper(nuscenes)
 
-    val_dl = DataLoader(val_ds, shuffle=True, batch_size=1)
+    val_dl = DataLoader(val_ds, shuffle=False, batch_size=1)
 
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
