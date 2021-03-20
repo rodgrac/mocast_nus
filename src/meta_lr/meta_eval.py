@@ -160,18 +160,19 @@ if __name__ == '__main__':
     for i in np.random.randint(0, len(val_out), 20):
         img = render_map(pred_helper, val_tokens[i])
         gt_cord = render_trajectories(pred_helper, val_tokens[i])
+        gt_n = gt_cord.shape[0]
         fig, ax = plt.subplots(1, 1)
         ax.grid(b=None)
         ax.imshow(img)
-        ax.plot(gt_cord[:7, 0],
-                gt_cord[:7, 1],
+        ax.plot(gt_cord[:gt_n - 12, 0],
+                gt_cord[:gt_n - 12, 1],
                 'w--^',
                 linewidth=3,
                 markersize=2,
                 zorder=650,
                 path_effects=[pe.Stroke(linewidth=4, foreground='g'), pe.Normal()])
-        ax.plot(gt_cord[7:, 0],
-                gt_cord[7:, 1],
+        ax.plot(gt_cord[-12:, 0],
+                gt_cord[-12:, 1],
                 'w--o',
                 linewidth=3,
                 markersize=2,
