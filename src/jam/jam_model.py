@@ -46,8 +46,8 @@ class JAM_TFR(nn.Module):
         # self.enc_avg_pool = nn.AvgPool2d(7)
 
         self.queries_l = nn.Linear(in_features=512 + 64, out_features=16 * 64, bias=False)
-        self.keys_l = nn.Conv2d(512, 16 * 64, kernel_size=1, stride=1, padding=1, bias=False)
-        self.values_l = nn.Conv2d(512, 16 * 64, kernel_size=1, stride=1, padding=1, bias=False)
+        self.keys_l = nn.Conv2d(512, 16 * 64, kernel_size=1, stride=1, padding=0, bias=False)
+        self.values_l = nn.Conv2d(512, 16 * 64, kernel_size=1, stride=1, padding=0, bias=False)
         self.attn_out = nn.Linear(in_features=16 * 64, out_features=512)
         # self.enc_cat_fc = nn.Linear(in_features=512+64+512, out_features=512)
 
@@ -123,7 +123,6 @@ class JAM_TFR(nn.Module):
         values = self.values_l(out).view(x.size(0), 16, 64, -1)
 
         energy = torch.einsum('bhf,bhfg->bhg', queries, keys)
-
         attn = torch.softmax(energy / ((16 * 64) ** 0.5), dim=2)
 
         out = torch.einsum("bhg,bhdg->bhd", attn, values).view(x.size(0), -1)
