@@ -121,7 +121,8 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
         val_scores_.extend(scores.cpu().numpy())
         val_tokens_.extend(data["token"])
         val_losses_.append(val_loss)
-        attn_maps_.extend(attn_map)
+        if attn_map:
+            attn_maps_.extend(attn_map)
 
     return val_out_, val_scores_, val_tokens_, attn_maps_, val_losses_,
 
@@ -129,8 +130,8 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_03_20_2021_15_23_05'
-    model_path = model_out_dir + "/Epoch_15_03_20_2021_18_38_18.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_03_21_2021_10_44_20'
+    model_path = model_out_dir + "/Epoch_15_03_21_2021_14_06_45.pth"
     #ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
@@ -152,7 +153,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='fftc').to(device)
+    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path, map_location=torch.device(device)))
@@ -220,9 +221,9 @@ if __name__ == '__main__':
                     path_effects=[pe.Stroke(linewidth=4, foreground='b'), pe.Normal()])
             plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
 
-        fig, ax = plt.subplots(4, 4)
-        for j in range(16):
-            ax[j//4, j%4].grid(b=None)
-            ax[j//4, j%4].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
+        # fig, ax = plt.subplots(4, 4)
+        # for j in range(16):
+        #     ax[j//4, j%4].grid(b=None)
+        #     ax[j//4, j%4].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
     #
     plt.show()
