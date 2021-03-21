@@ -97,7 +97,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='fftc').to(device)
+    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     model_out_dir = os.path.join(model_out_dir_root,
                                  model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
@@ -121,7 +121,7 @@ if __name__ == '__main__':
         if (epoch+1) > 10:
             save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
-        _, _, _, val_loss = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
+        _, _, _, _, val_loss = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
         print("Epoch {}/{} Val loss: {:.4f}".format(epoch + 1, epochs, np.mean(val_loss)))
         val_losses.append(np.mean(val_loss))
 

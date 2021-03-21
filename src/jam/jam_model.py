@@ -21,6 +21,8 @@ class JAM_TFR(nn.Module):
         self.degree = degree
         self.modes = modes
         self.dec = dec
+        self.att_heads = 8
+        self.att_dim = 64
         self.basis_norm = False
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
@@ -45,10 +47,10 @@ class JAM_TFR(nn.Module):
         self.enc_bn2 = nn.BatchNorm2d(512)
         # self.enc_avg_pool = nn.AvgPool2d(7)
 
-        self.queries_l = nn.Linear(in_features=512 + 64, out_features=16 * 64, bias=False)
-        self.keys_l = nn.Conv2d(512, 16 * 64, kernel_size=1, stride=1, padding=0, bias=False)
-        self.values_l = nn.Conv2d(512, 16 * 64, kernel_size=1, stride=1, padding=0, bias=False)
-        self.attn_out = nn.Linear(in_features=16 * 64, out_features=512)
+        self.queries_l = nn.Linear(in_features=512 + 64, out_features=self.att_heads * self.att_dim, bias=False)
+        self.keys_l = nn.Conv2d(512, self.att_heads * self.att_dim, kernel_size=1, stride=1, padding=0, bias=False)
+        self.values_l = nn.Conv2d(512, self.att_heads * self.att_dim, kernel_size=1, stride=1, padding=0, bias=False)
+        self.attn_out = nn.Linear(in_features=self.att_heads * self.att_dim, out_features=512)
         # self.enc_cat_fc = nn.Linear(in_features=512+64+512, out_features=512)
 
         self.cls_fc = nn.Linear(in_features=512 + 64 + 512, out_features=modes)
@@ -102,7 +104,7 @@ class JAM_TFR(nn.Module):
         for ag in torch.arange(agents_state_len.size(1)):
             agent_state = self.state_lstm(agents_state[:, ag, :, :], agents_state_len[:, ag], device, eval=eval)
             state_tensor[torch.arange(x.size(0)), agents_grid_pos[:, ag, 0], agents_grid_pos[:, ag, 1],
-            :] += agent_state.clone()
+            :] += agent_state
 
         out = torch.cat((cnn_tensor, state_tensor.permute(0, 3, 1, 2)), dim=1)
 
@@ -118,12 +120,12 @@ class JAM_TFR(nn.Module):
         ego_tensor = torch.cat((out[:, :, 3, 3], ego_state), dim=1)
 
         ### Attention Block
-        queries = self.queries_l(ego_tensor).view(x.size(0), 16, -1)
-        keys = self.keys_l(out).view(x.size(0), 16, 64, -1)
-        values = self.values_l(out).view(x.size(0), 16, 64, -1)
+        queries = self.queries_l(ego_tensor).view(x.size(0), self.att_heads, -1)
+        keys = self.keys_l(out).view(x.size(0), self.att_heads, self.att_dim, -1)
+        values = self.values_l(out).view(x.size(0), self.att_heads, self.att_dim, -1)
 
         energy = torch.einsum('bhf,bhfg->bhg', queries, keys)
-        attn = torch.softmax(energy / ((16 * 64) ** 0.5), dim=2)
+        attn = torch.softmax(energy / ((self.att_heads * self.att_dim) ** 0.5), dim=2)
 
         out = torch.einsum("bhg,bhdg->bhd", attn, values).view(x.size(0), -1)
         out = self.attn_out(out)
@@ -175,7 +177,7 @@ class JAM_TFR(nn.Module):
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
-            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach()
+            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach(), attn.detach()
         else:
             # Training
             return torch.stack((out_x, out_y), dim=3), conf

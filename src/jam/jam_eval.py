@@ -51,7 +51,7 @@ def forward_mm(data, model, device, criterion, test_opt=False):
     #     torch.set_grad_enabled(False)
 
     with torch.no_grad():
-        outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len,
+        outputs, scores, attn_map = model(inputs, device, data["ego_state"].to(device), agent_seq_len,
                                 data["agents_state"].to(device), data['agents_seq_len'].to(device),
                                 data['agents_rel_pos'].to(device), out_type=2, eval=True)
 
@@ -68,7 +68,7 @@ def forward_mm(data, model, device, criterion, test_opt=False):
     # if test_opt:
     #     reset_param_data(model.dec_fc2, org_model)
 
-    return outputs, model.sm(scores), loss.detach().cpu().numpy()
+    return outputs, model.sm(scores), loss.detach().cpu().numpy(), attn_map
 
 
 def test_time_opt(data, fmodel, device):
@@ -108,27 +108,29 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
     val_scores_ = []
     val_tokens_ = []
     val_losses_ = []
+    attn_maps_ = []
 
     model.eval()
     torch.set_grad_enabled(False)
 
     progress_bar = tqdm(val_dl)
     for data in progress_bar:
-        outputs, scores, val_loss = forward_mm(data, model, device, criterion, test_opt=test_opt)
+        outputs, scores, val_loss, attn_map = forward_mm(data, model, device, criterion, test_opt=test_opt)
 
         val_out_.extend(outputs.cpu().numpy())
         val_scores_.extend(scores.cpu().numpy())
         val_tokens_.extend(data["token"])
         val_losses_.append(val_loss)
+        attn_maps_.extend(attn_map)
 
-    return val_out_, val_scores_, val_tokens_, val_losses_
+    return val_out_, val_scores_, val_tokens_, attn_maps_, val_losses_,
 
 
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_03_19_2021_15_42_00'
-    model_path = model_out_dir + "/Epoch_15_03_19_2021_17_44_39.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_03_20_2021_15_23_05'
+    model_path = model_out_dir + "/Epoch_15_03_20_2021_18_38_18.pth"
     #ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
@@ -158,7 +160,7 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    val_out, val_scores, val_tokens, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
+    val_out, val_scores, val_tokens, attn_maps, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
 
     print("Avg val loss: {:.4f}".format(np.mean(val_losses)))
 
@@ -176,7 +178,7 @@ if __name__ == '__main__':
     eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
 
-    for i in np.random.randint(0, len(val_out), 20):
+    for i in np.random.randint(0, len(val_out), 1):
         img = render_map(pred_helper, val_tokens[i])
         gt_cord = render_trajectories(pred_helper, val_tokens[i])
         fig, ax = plt.subplots(1, 1)
@@ -217,5 +219,10 @@ if __name__ == '__main__':
                     zorder=650,
                     path_effects=[pe.Stroke(linewidth=4, foreground='b'), pe.Normal()])
             plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
+
+        fig, ax = plt.subplots(4, 4)
+        for j in range(16):
+            ax[j//4, j%4].grid(b=None)
+            ax[j//4, j%4].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
     #
     plt.show()
