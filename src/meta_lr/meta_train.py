@@ -50,8 +50,9 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
 
     # Future points
     targets = data["agent_future"].to(device)
-    targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
+    target_mask = data['mask_future'].to(device)
+    # targets = torch.cat((history_window, targets), dim=1)
+    # target_mask = torch.cat((history_mask, target_mask), dim=1)
 
     # Inner GD Loop
     for _ in range(in_steps):
@@ -69,7 +70,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
         dopt.step(spt_loss)
 
     # Evaluate loss on targets
-    qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=2)
+    qry_outputs, qry_scores = f_model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=1)
 
     labels = find_closest_traj(qry_outputs, targets)
     loss_reg = criterion[0](qry_outputs[torch.arange(qry_outputs.size(0)), labels, :, :], targets)
@@ -119,11 +120,8 @@ def train(model, train_dl, device, criterion, outer_optim, inner_steps):
 
         epoch_train_loss.append(avg_batch_loss)
         if it % log_fr == 0:
-            print(
-                "Epoch: {}/{} Sample: {}, Sample outer loss: {:.4f}, Epoch loss(avg): {:.4f}".format(epoch + 1, epochs,
-                                                                                                     it, avg_batch_loss,
-                                                                                                     np.mean(
-                                                                                                         epoch_train_loss)))
+            print("Epoch: {}/{} Sample: {}, Sample outer loss: {:.4f}, Epoch loss(avg): {:.4f}"
+                  .format(epoch + 1, epochs, it, avg_batch_loss, np.mean(epoch_train_loss)))
 
     return epoch_train_loss
 
@@ -140,7 +138,7 @@ if __name__ == '__main__':
     poly_deg = 5
     num_modes = 10
     epochs = 5
-    inner_steps_ = 1
+    inner_steps_ = 5
     batch_size = args.batch_size
 
     model_out_dir_root = '/scratch/rodney/models/nuScenes'

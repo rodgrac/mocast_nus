@@ -3,7 +3,7 @@ import sys
 import time
 
 os.system("nohup sh -c '" +
-          sys.executable + " meta_train.py --batch_size 16 --gpu 0 > /scratch/rodney/models/nuScenes/logs/metalr_mar21_mtweight.txt" +
+          sys.executable + " meta_train.py --batch_size 16 --gpu 0 > /scratch/rodney/models/nuScenes/logs/metalr_mar22_mtweight.txt" +
                            "' &")
 # time.sleep(5)
 #

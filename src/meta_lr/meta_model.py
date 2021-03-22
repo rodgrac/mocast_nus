@@ -13,7 +13,7 @@ import torch.fft
 
 # Multimodal Regression | PolyFit | MetaLR
 class MOCAST4_METALR(nn.Module):
-    def __init__(self, in_ch, out_frames, degree, modes):
+    def __init__(self, in_ch, out_frames, degree, modes, eval=False):
         super().__init__()
         self.degree = degree
         self.modes = modes
@@ -42,6 +42,9 @@ class MOCAST4_METALR(nn.Module):
 
         self.final_fc2 = nn.Linear(in_features=256, out_features=self.out_pts)
 
+        if eval:
+            self.weight_mask = nn.Parameter(torch.ones((1, 7)), requires_grad=False)
+
         self.inner_parameters = [
             {'params': self.final_fc1.parameters()},
             {'params': self.final_fc2.parameters()},
@@ -60,11 +63,11 @@ class MOCAST4_METALR(nn.Module):
 
         self.sm = nn.Softmax(dim=1)
 
-    def forward(self, x, device, state=None, state_len=None, out_type=3):
+    def forward(self, x, device, state=None, state_len=None, out_type=3, eval=False):
         self.tmat = self.tmat.to(device)
         enc_h_s = torch.zeros(1, x.size(0), 64).to(device)
         enc_c_s = torch.zeros(1, x.size(0), 64).to(device)
-        if out_type != 3:
+        if not eval:
             enc_h_s = nn.init.xavier_normal_(enc_h_s)
             enc_c_s = nn.init.xavier_normal_(enc_c_s)
 
@@ -97,7 +100,7 @@ class MOCAST4_METALR(nn.Module):
         # conf = out[:, :, -1]
         # out = out[:, :, :(self.degree + 1) * 2].clone()
 
-        # out_type: 0 (history); 1 (future); 2 (both_train); 3 (both_eval)
+        # out_type: 0 (history); 1 (future); 2 (both)
         if out_type == 0:
             out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat[:, :7])
             out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat[:, :7])
@@ -108,7 +111,7 @@ class MOCAST4_METALR(nn.Module):
             out_x = torch.matmul(out[:, :, :self.degree + 1], self.tmat)
             out_y = torch.matmul(out[:, :, self.degree + 1:], self.tmat)
 
-        if out_type == 3:
+        if eval:
             # Testing
             # Pick top N modes
             (_, top_idx) = torch.topk(conf, 10)
