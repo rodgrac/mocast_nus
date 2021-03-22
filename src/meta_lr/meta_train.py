@@ -43,8 +43,10 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
     agent_seq_len = torch.sum(data["mask_past"], dim=1).to(device)
     # History points
     history_window = torch.flip(data["agent_past"], [1]).to(device)
+
     # Mask to indicate valid history points
-    history_mask = torch.flip(data['mask_past'], [1]).to(device)
+    history_mask = (torch.flip(data['mask_past'], [1]) * torch.softmax(f_model.weight_mask.repeat(inputs.size(0), 1),
+                                                                       dim=1)).to(device)
 
     # Future points
     targets = data["agent_future"].to(device)
@@ -83,7 +85,7 @@ def forward_mm(data, f_model, device, criterion, dopt, in_steps, it):
 
 def train(model, train_dl, device, criterion, outer_optim, inner_steps):
     # ==== TRAIN LOOP
-    log_fr = 1
+    log_fr = 100
     # torch.autograd.set_detect_anomaly(True)
 
     model.train()
@@ -95,7 +97,7 @@ def train(model, train_dl, device, criterion, outer_optim, inner_steps):
     for it, data in enumerate(progress_bar):
         query_loss = []
 
-        inner_opt = torch.optim.SGD(model.inner_parameters, lr=5e-3)
+        inner_opt = torch.optim.SGD(model.inner_parameters, lr=1e-3)
         outer_optim[0].zero_grad()
         # Inner loop
         for b in range(len(data['token'])):
@@ -111,7 +113,7 @@ def train(model, train_dl, device, criterion, outer_optim, inner_steps):
         # nn.utils.clip_grad_value_(model.parameters(), 0.5)
 
         outer_optim[0].step()
-        outer_optim[1].step()
+        # outer_optim[1].step()
 
         avg_batch_loss = sum(query_loss) / len(data['token'])
 
@@ -119,7 +121,9 @@ def train(model, train_dl, device, criterion, outer_optim, inner_steps):
         if it % log_fr == 0:
             print(
                 "Epoch: {}/{} Sample: {}, Sample outer loss: {:.4f}, Epoch loss(avg): {:.4f}".format(epoch + 1, epochs,
-                        it, avg_batch_loss, np.mean(epoch_train_loss)))
+                                                                                                     it, avg_batch_loss,
+                                                                                                     np.mean(
+                                                                                                         epoch_train_loss)))
 
     return epoch_train_loss
 
@@ -135,8 +139,8 @@ if __name__ == '__main__':
     out_pts = 12
     poly_deg = 5
     num_modes = 10
-    epochs = 3
-    inner_steps_ = 5
+    epochs = 5
+    inner_steps_ = 1
     batch_size = args.batch_size
 
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
@@ -162,6 +166,11 @@ if __name__ == '__main__':
     for param in list(model.parameters())[:-6]:
         param.requires_grad = False
 
+    model.register_parameter(name='weight_mask', param=nn.Parameter(torch.ones((1, 7), requires_grad=True)))
+
+    model.inner_parameters.append({'params': model.weight_mask})
+    model.outer_parameters.append({'params': model.weight_mask})
+
     model_out_dir = os.path.join(model_out_dir_root,
                                  model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))
 
@@ -173,14 +182,14 @@ if __name__ == '__main__':
     criterion_cls = nn.CrossEntropyLoss()
 
     meta_optim = torch.optim.Adam(model.outer_parameters, 1e-4)
-    sched = torch.optim.lr_scheduler.OneCycleLR(meta_optim, 1e-3, epochs=epochs,
-                                                steps_per_epoch=len(train_dl))
+    # sched = torch.optim.lr_scheduler.OneCycleLR(meta_optim, 1e-3, epochs=epochs,
+    #                                             steps_per_epoch=len(train_dl))
 
     train_losses = []
     val_losses = []
     for epoch in range(epochs):
         # Training
-        train_loss = train(model, train_dl, device, [criterion_reg, criterion_cls], [meta_optim, sched], inner_steps_)
+        train_loss = train(model, train_dl, device, [criterion_reg, criterion_cls], [meta_optim], inner_steps_)
         train_losses.append(np.mean(train_loss))
         save_model_dict(model, model_out_dir, epoch + 1)
         # Validation
