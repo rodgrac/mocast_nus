@@ -15,9 +15,9 @@ class ResNetConv_512(nn.Module):
         return self.features(x)
 
 
-class SelfAttention(nn.Module):
+class MHAttention(nn.Module):
     def __init__(self, heads, head_dim):
-        super(SelfAttention, self).__init__()
+        super(MHAttention, self).__init__()
         self.heads = heads
         self.head_dim = head_dim
         self.hidden_size = heads * head_dim
@@ -34,46 +34,11 @@ class SelfAttention(nn.Module):
         energy = torch.einsum('bhf,bhfg->bhg', q, k)
         attn = torch.softmax(energy / (self.hidden_size ** 0.5), dim=2)
 
-        out = torch.einsum("bhg,bhfg->bhf", attn, v).view(v.size(0), -1)
+        out = torch.einsum("bhg,bhfg->bhf", attn, v)
 
-        return self.attn_out(out)
+        out = self.attn_out(out.view(q.size(0), -1))
 
-
-class TFRBlock(nn.Module):
-    def __init__(self, heads, head_dim):
-        super(TFRBlock, self).__init__()
-        self.hidden_size = heads * head_dim
-        self.attnblk = SelfAttention(heads, head_dim)
-        self.ln1 = nn.LayerNorm(self.hidden_size)
-        self.ln2 = nn.LayerNorm(self.hidden_size)
-
-        self.ff = nn.Sequential(
-            nn.Linear(self.hidden_size, 4*self.hidden_size),
-            nn.ReLU(),
-            nn.Linear(4*self.hidden_size, self.hidden_size)
-        )
-
-        self.dropout = nn.Dropout(0.5)
-
-    def forward(self, q, k, v):
-        attn = self.attnblk(q, k, v)
-        x = self.dropout(self.ln1(attn + q))
-        ff_x = self.ff(x)
-        out = self.dropout(self.ln2(ff_x + x))
-
-        return out
-
-
-class TFREncoder(nn.Module):
-    def __init__(self, heads, head_dims):
-        super(TFREncoder, self).__init__()
-        #self.grid_size = grid_size
-        #self.position_embedding = nn.Embedding(grid_size, heads*head_dims)
-
-        self.layers = TFRBlock(heads, head_dims)
-
-    def forward(self, q, x):
-        return self.layers(q, x, x)
+        return out, attn
 
 
 class JAM_TFR(nn.Module):
@@ -103,17 +68,19 @@ class JAM_TFR(nn.Module):
         self.enc_bn1 = nn.BatchNorm2d(512)
         self.enc_act = nn.ReLU(inplace=True)
 
-        self.enc_conv2 = nn.Conv2d(512, self.att_heads*self.att_dim, kernel_size=3, stride=2, padding=1, bias=False)
+        self.enc_conv2 = nn.Conv2d(512, self.att_heads * self.att_dim, kernel_size=3, stride=2, padding=1, bias=False)
         # self.enc_ln2 = nn.LayerNorm([512, 7, 7])
-        self.enc_bn2 = nn.BatchNorm2d(self.att_heads*self.att_dim)
+        self.enc_bn2 = nn.BatchNorm2d(self.att_heads * self.att_dim)
         # self.enc_avg_pool = nn.AvgPool2d(7)
-        self.ego_fc = nn.Linear(in_features=self.att_heads*self.att_dim+64, out_features=self.att_heads*self.att_dim)
+        self.ego_fc = nn.Linear(in_features=self.att_heads * self.att_dim + 64,
+                                out_features=self.att_heads * self.att_dim)
 
-        self.tfr_enc = TFREncoder(self.att_heads, self.att_dim)
+        self.mh_att = MHAttention(self.att_heads, self.att_dim)
 
-        self.cls_fc = nn.Linear(in_features=512 + 512, out_features=modes)
+        self.cls_fc1 = nn.Linear(in_features=2 * self.att_heads * self.att_dim, out_features=256)
+        self.cls_fc2 = nn.Linear(in_features=256, out_features=modes)
 
-        self.dec_fc1 = nn.Linear(in_features=512 + 512, out_features=256)
+        self.dec_fc1 = nn.Linear(in_features=2 * self.att_heads * self.att_dim, out_features=256)
         self.l_relu = nn.ReLU(inplace=True)
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
@@ -177,18 +144,20 @@ class JAM_TFR(nn.Module):
 
         ego_tensor = self.ego_fc(torch.cat((out[:, :, 3, 3], ego_state), dim=1))
 
-        out = self.tfr_enc(ego_tensor, out)
+        out, attn = self.mh_att(ego_tensor, out, out)
 
         out = torch.cat((out, ego_tensor), dim=1)
         # out = self.enc_cat_fc(out)
 
         ### Decoder block
-        conf = self.cls_fc(out)
+        conf = self.cls_fc1(out)
+        conf = self.cls_fc2(conf)
 
         out = self.dec_fc1(out)
         out = self.l_relu(out)
 
         out = self.dec_fc2(out)
+
         out = out.view(x.size(0), self.modes, -1)
 
         # conf = out[:, :, -1]
@@ -224,7 +193,7 @@ class JAM_TFR(nn.Module):
             out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
             out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
             conf = torch.gather(conf, 1, top_idx)
-            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach(), None
+            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach(), attn
         else:
             # Training
             return torch.stack((out_x, out_y), dim=3), conf

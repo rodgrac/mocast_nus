@@ -33,7 +33,7 @@ def forward_mm(data, model, device, criterion):
     outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len, data["agents_state"].to(device),
                             data['agents_seq_len'].to(device), data['agents_rel_pos'].to(device), out_type=2)
 
-    labels = find_closest_traj(outputs, targets)
+    labels = find_closest_traj(outputs, targets, target_mask)
 
     loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
     loss_cls = criterion[1](scores, labels)
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     in_ch = 3
     out_pts = 12
     poly_deg = 5
-    num_modes = 10
+    num_modes = 16
     epochs = 15
     batch_size = 16
 
@@ -95,7 +95,7 @@ if __name__ == '__main__':
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 
     model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
@@ -106,7 +106,7 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
 
     sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
                                                 steps_per_epoch=len(train_dl))

@@ -55,7 +55,7 @@ def forward_mm(data, model, device, criterion, test_opt=False):
                                 data["agents_state"].to(device), data['agents_seq_len'].to(device),
                                 data['agents_rel_pos'].to(device), out_type=2, eval=True)
 
-        labels = find_closest_traj(outputs, targets)
+        labels = find_closest_traj(outputs, targets, target_mask)
 
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
         loss_cls = criterion[1](scores, labels)
@@ -114,14 +114,15 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
     torch.set_grad_enabled(False)
 
     progress_bar = tqdm(val_dl)
-    for data in progress_bar:
+    for i, data in enumerate(progress_bar):
+        #if i in samples:
         outputs, scores, val_loss, attn_map = forward_mm(data, model, device, criterion, test_opt=test_opt)
 
         val_out_.extend(outputs.cpu().numpy())
         val_scores_.extend(scores.cpu().numpy())
         val_tokens_.extend(data["token"])
         val_losses_.append(val_loss)
-        if attn_map:
+        if attn_map is not None:
             attn_maps_.extend(attn_map)
 
     return val_out_, val_scores_, val_tokens_, attn_maps_, val_losses_,
@@ -130,16 +131,19 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_03_21_2021_10_44_20'
-    model_path = model_out_dir + "/Epoch_15_03_21_2021_14_06_45.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_04_07_2021_12_20_11'
+    model_path = model_out_dir + "/Epoch_25_04_07_2021_15_29_40.pth"
     #ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
     in_ch = 3
     out_pts = 12
     poly_deg = 5
-    num_modes = 10
+    num_modes = 16
     batch_size = 16
+
+   # samples = [5427, 4143, 5256, 5063, 7353]
+    # samples = [50]
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
@@ -178,8 +182,10 @@ if __name__ == '__main__':
     print("[Eval] {} metrics".format(model.__class__.__name__ ))
     eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
+    exit()
 
-    for i in np.random.randint(0, len(val_out), 1):
+    #for i in np.random.randint(0, len(val_out), 1):
+    for i in range(len(val_out)):
         img = render_map(pred_helper, val_tokens[i])
         gt_cord = render_trajectories(pred_helper, val_tokens[i])
         fig, ax = plt.subplots(1, 1)
@@ -221,9 +227,9 @@ if __name__ == '__main__':
                     path_effects=[pe.Stroke(linewidth=4, foreground='b'), pe.Normal()])
             plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
 
-        # fig, ax = plt.subplots(4, 4)
-        # for j in range(16):
-        #     ax[j//4, j%4].grid(b=None)
-        #     ax[j//4, j%4].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
+        fig, ax = plt.subplots(2, 5)
+        for j in range(10):
+            ax[j//5, j%5].grid(b=None)
+            ax[j//5, j%5].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
     #
     plt.show()
