@@ -51,7 +51,7 @@ def forward_mm(data, model, device, criterion, test_opt=False):
 
     with torch.no_grad():
         outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=2, eval=True)
-        labels = find_closest_traj(outputs, targets)
+        labels = find_closest_traj(outputs, targets, target_mask)
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
         loss_cls = criterion[1](scores, labels)
         loss = loss_reg + loss_cls
@@ -121,7 +121,8 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_path = model_out_dir_root + "/MOCAST_4_03_17_2021_15_32_24/Epoch_15_03_17_2021_18_35_07.pth"
+    model_out_dir = model_out_dir_root + '/MOCAST_4_04_08_2021_09_37_55'
+    model_path = model_out_dir + "/Epoch_15_04_08_2021_12_58_47.pth"
     ds_type = 'v1.0-trainval'
     # ds_type = 'v1.0-mini'
 
@@ -143,7 +144,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
+    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='poly').to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path))
@@ -161,13 +162,15 @@ if __name__ == '__main__':
     for output, score, token in zip(val_out, val_scores, val_tokens):
         model_preds.append(dump_predictions(output, score, token, pred_helper))
 
-    json.dump(model_preds, open(os.path.join('../out', 'mocast4_preds.json'), "w"))
+    json.dump(model_preds, open(os.path.join(model_out_dir, 'mocast4_preds.json'), "w"))
 
     '''############################ Quantitative ###########################################'''
     config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
-    print("[Eval] MOCAST4 metrics")
-    eval_metrics('../out/mocast4_preds.json', pred_helper, config, '../out/mocast4_metrics.json')
+    print("[Eval] {} metrics".format(model.__class__.__name__ ))
+    eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
+
+    exit()
 
     for i in np.random.randint(0, len(val_out), 20):
         img = render_map(pred_helper, val_tokens[i])
