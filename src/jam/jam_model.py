@@ -36,20 +36,22 @@ class JAM_TFR(nn.Module):
         self.enc_lstm_fc = nn.Linear(in_features=64, out_features=64)
 
         self.enc_conv1 = nn.Conv2d(1024 + 64, 512, kernel_size=3, stride=1, padding=1, bias=False)
-        #self.enc_ln1 = nn.LayerNorm([512, 14, 14])
         self.enc_bn1 = nn.BatchNorm2d(512)
         self.enc_act = nn.ReLU(inplace=True)
 
         self.enc_conv2 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1, bias=False)
-        #self.enc_ln2 = nn.LayerNorm([512, 7, 7])
         self.enc_bn2 = nn.BatchNorm2d(512)
         # self.enc_avg_pool = nn.AvgPool2d(7)
 
-        self.att_linear = nn.Linear(in_features=512+64+512, out_features=1)
+        self.queries = nn.Linear(in_features=512+64, out_features=512+64)
+        self.values = nn.Linear(in_features=512, out_features=512+64)
+
+        self.att_scale = torch.nn.Parameter(torch.FloatTensor(512+64).uniform_(-0.1, 0.1))
 
         #self.enc_cat_fc = nn.Linear(in_features=512+64+512, out_features=512)
 
-        self.cls_fc = nn.Linear(in_features=512+64+512, out_features=modes)
+        self.cls_fc1 = nn.Linear(in_features=512+64+512, out_features=256)
+        self.cls_fc2 = nn.Linear(in_features=256, out_features=modes)
 
         self.dec_fc1 = nn.Linear(in_features=512+64+512, out_features=256)
         self.l_relu = nn.ReLU(inplace=True)
@@ -113,21 +115,24 @@ class JAM_TFR(nn.Module):
         # out = self.enc_avg_pool(out)
 
         # Attention Block
-        out = out.view(out.size(0), out.size(1), -1).clone()
-        ego_tensor = torch.cat((out[:, :, 24], ego_state), dim=1)
-        out = torch.cat((out[:, :, :24], out[:, :, 25:]), dim=2)
+        out = out.view(out.size(0), out.size(1), -1).clone().permute(0, 2, 1)
+        ego_tensor = torch.cat((out[:, 24, :], ego_state), dim=1)
+        out = torch.cat((out[:, :24, :], out[:, 25:, :]), dim=1)
 
-        att_weights = torch.zeros((out.size(0), out.size(-1)), requires_grad=True).to(device)
+        q = ego_tensor.unsqueeze(1).repeat(1, 48, 1)
+        att_weights = self.queries(q) + self.values(out)
+        att_weights = torch.tanh(att_weights) @ self.att_scale
 
-        for grid in torch.arange(out.size(-1)):
-                att_weights[:, grid] = self.att_linear(torch.cat((out[:, :, grid], ego_tensor), dim=1)).squeeze(1)
+        # for grid in torch.arange(out.size(-1)):
+        #         att_weights[:, grid] = self.att_linear(torch.cat((out[:, :, grid], ego_tensor), dim=1)).squeeze(1)
 
-        out = torch.einsum('bfg,bw->bf', out, self.sm(att_weights))
+        out = torch.einsum('bgf,bg->bf', out, torch.softmax(att_weights, dim=1))
 
         out = torch.cat((out, ego_tensor), dim=1)
         #out = self.enc_cat_fc(out)
 
-        conf = self.cls_fc(out)
+        conf = self.cls_fc1(out)
+        conf = self.cls_fc2(conf)
 
         out = self.dec_fc1(out)
         out = self.l_relu(out)

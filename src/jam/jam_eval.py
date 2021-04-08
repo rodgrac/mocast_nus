@@ -55,7 +55,7 @@ def forward_mm(data, model, device, criterion, test_opt=False):
                                 data["agents_state"].to(device), data['agents_seq_len'].to(device),
                                 data['agents_rel_pos'].to(device), out_type=2, eval=True)
 
-        labels = find_closest_traj(outputs, targets)
+        labels = find_closest_traj(outputs, targets, target_mask)
 
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
         loss_cls = criterion[1](scores, labels)
@@ -127,8 +127,8 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_03_19_2021_15_42_00'
-    model_path = model_out_dir + "/Epoch_15_03_19_2021_17_44_39.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_04_07_2021_21_58_31'
+    model_path = model_out_dir + "/Epoch_20_04_08_2021_00_30_10.pth"
     #ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
@@ -150,7 +150,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='fftc').to(device)
+    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path, map_location=torch.device(device)))
@@ -175,6 +175,8 @@ if __name__ == '__main__':
     print("[Eval] {} metrics".format(model.__class__.__name__ ))
     eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
+
+    exit()
 
     for i in np.random.randint(0, len(val_out), 20):
         img = render_map(pred_helper, val_tokens[i])

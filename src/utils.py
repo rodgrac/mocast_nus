@@ -63,8 +63,9 @@ def reset_param_data(model, new_params):
 
 
 # Returns closest mode to GT
-def find_closest_traj(pred, gt):
-    ade = torch.sum((gt.unsqueeze(1) - pred) ** 2, dim=-1) ** 0.5
-    ade = torch.mean(ade, dim=-1)
+def find_closest_traj(pred, gt, mask):
+    masked_pred = pred * mask.unsqueeze(1).unsqueeze(3).repeat(1, pred.size(1), 1, 1)
+    ade = torch.sum((gt.unsqueeze(1) - masked_pred) ** 2, dim=-1) ** 0.5
+    ade = torch.sum(ade, dim=-1)/torch.sum(mask.unsqueeze(1).repeat(1, pred.size(1), 1), dim=2)
     return torch.argmin(ade, dim=-1)
 
