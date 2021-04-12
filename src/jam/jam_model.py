@@ -16,11 +16,12 @@ class ResNetConv_512(nn.Module):
 
 
 class JAM_TFR(nn.Module):
-    def __init__(self, in_ch, out_frames, degree, modes, dec='ortho'):
+    def __init__(self, in_ch, out_frames, degree, modes, dec='ortho', att=True):
         super().__init__()
         self.degree = degree
         self.modes = modes
         self.dec = dec
+        self.att = att
         self.basis_norm = False
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
@@ -41,19 +42,20 @@ class JAM_TFR(nn.Module):
 
         self.enc_conv2 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1, bias=False)
         self.enc_bn2 = nn.BatchNorm2d(512)
-        # self.enc_avg_pool = nn.AvgPool2d(7)
 
-        self.queries = nn.Linear(in_features=512+64, out_features=512+64)
-        self.values = nn.Linear(in_features=512, out_features=512+64)
+        if self.att:
+            self.queries = nn.Linear(in_features=512 + 64, out_features=512 + 64)
+            self.values = nn.Linear(in_features=512, out_features=512 + 64)
+            self.att_scale = torch.nn.Parameter(torch.FloatTensor(512 + 64).uniform_(-0.1, 0.1))
+            self.cls_fc1 = nn.Linear(in_features=512+64+512, out_features=256)
+            self.dec_fc1 = nn.Linear(in_features=512+64+512, out_features=256)
+        else:
+            self.enc_avg_pool = nn.AvgPool2d(7)
+            self.cls_fc1 = nn.Linear(in_features=512 + 64, out_features=256)
+            self.dec_fc1 = nn.Linear(in_features=512 + 64, out_features=256)
 
-        self.att_scale = torch.nn.Parameter(torch.FloatTensor(512+64).uniform_(-0.1, 0.1))
-
-        #self.enc_cat_fc = nn.Linear(in_features=512+64+512, out_features=512)
-
-        self.cls_fc1 = nn.Linear(in_features=512+64+512, out_features=256)
         self.cls_fc2 = nn.Linear(in_features=256, out_features=modes)
 
-        self.dec_fc1 = nn.Linear(in_features=512+64+512, out_features=256)
         self.l_relu = nn.ReLU(inplace=True)
 
         self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
@@ -112,24 +114,24 @@ class JAM_TFR(nn.Module):
         out = self.enc_conv2(out)
         out = self.enc_bn2(out)
         out = self.enc_act(out)
-        # out = self.enc_avg_pool(out)
 
-        # Attention Block
-        out = out.view(out.size(0), out.size(1), -1).clone().permute(0, 2, 1)
-        ego_tensor = torch.cat((out[:, 24, :], ego_state), dim=1)
-        out = torch.cat((out[:, :24, :], out[:, 25:, :]), dim=1)
+        if self.att:
+            # Attention Block
+            out = out.view(out.size(0), out.size(1), -1).clone().permute(0, 2, 1)
+            ego_tensor = torch.cat((out[:, 24, :], ego_state), dim=1)
+            out = torch.cat((out[:, :24, :], out[:, 25:, :]), dim=1)
 
-        q = ego_tensor.unsqueeze(1).repeat(1, 48, 1)
-        att_weights = self.queries(q) + self.values(out)
-        att_weights = torch.tanh(att_weights) @ self.att_scale
+            q = ego_tensor.unsqueeze(1).repeat(1, 48, 1)
+            att_weights = self.queries(q) + self.values(out)
+            att_weights = torch.tanh(att_weights) @ self.att_scale
+            out = torch.einsum('bgf,bg->bf', out, torch.softmax(att_weights, dim=1))
 
-        # for grid in torch.arange(out.size(-1)):
-        #         att_weights[:, grid] = self.att_linear(torch.cat((out[:, :, grid], ego_tensor), dim=1)).squeeze(1)
+            out = torch.cat((out, ego_tensor), dim=1)
 
-        out = torch.einsum('bgf,bg->bf', out, torch.softmax(att_weights, dim=1))
-
-        out = torch.cat((out, ego_tensor), dim=1)
-        #out = self.enc_cat_fc(out)
+        else:
+            # Average pooling
+            out = self.enc_avg_pool(out).view(out.size(0), -1)
+            out = torch.cat((out, ego_state), dim=1)
 
         conf = self.cls_fc1(out)
         conf = self.cls_fc2(conf)

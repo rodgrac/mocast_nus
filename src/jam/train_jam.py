@@ -97,7 +97,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
+    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho', att=False).to(device)
 
     model_out_dir = os.path.join(model_out_dir_root,
                                  model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))

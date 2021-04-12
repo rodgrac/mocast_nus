@@ -126,9 +126,9 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 
 if __name__ == '__main__':
     torch.cuda.empty_cache()
-    model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_04_07_2021_21_58_31'
-    model_path = model_out_dir + "/Epoch_20_04_08_2021_00_30_10.pth"
+    model_out_dir_root = '/scratch/rodney/models/nusc_sota'
+    model_out_dir = model_out_dir_root + '/JAM_TFR_04_04_2021_13_15_14'
+    model_path = model_out_dir + "/Epoch_15_04_04_2021_15_26_00.pth"
     #ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
@@ -150,7 +150,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
+    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho', att=False).to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path, map_location=torch.device(device)))
