@@ -26,8 +26,9 @@ def forward_mm(data, model, device, criterion):
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
     targets = data["agent_future"].to(device)
+    target_mask = data['mask_future'].to(device)
     targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
+    target_mask = torch.cat((history_mask, target_mask), dim=1)
     # Forward pass
     outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=2)
 

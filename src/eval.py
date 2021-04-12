@@ -35,8 +35,9 @@ def forward_mm(data, model, device, criterion, test_opt=False):
     history_mask = torch.flip(data['mask_past'], [1]).to(device)
 
     targets = data["agent_future"].to(device)
+    target_mask = data['mask_future'].to(device)
     targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, data['mask_future'].to(device)), dim=1)
+    target_mask = torch.cat((history_mask, target_mask), dim=1)
 
     if test_opt:
         with torch.no_grad():

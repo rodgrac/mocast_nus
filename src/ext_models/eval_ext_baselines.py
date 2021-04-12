@@ -3,6 +3,7 @@ import os
 import sys
 import torch
 import pickle
+from tqdm import tqdm
 
 from process_ds import nuScenes_load
 from utils import eval_metrics
@@ -48,11 +49,10 @@ def dump_cv_oracle_pred(helper, config, output_dir):
     json.dump(oracle_preds, open(os.path.join(output_dir, "oracle_preds.json"), "w"))
 
 
-def dump_mtp_pred(helper, config, model_path, output_dir):
-    dataset = get_prediction_challenge_split("mini_val", NUSCENES_DATASET)
+def dump_mtp_pred(dataset, helper, config, model_path, output_dir, device):
 
     backbone = ResNetBackbone('resnet50')
-    mtp = MTP(backbone, num_modes=10, seconds=6)
+    mtp = MTP(backbone, num_modes=10, seconds=6).to(device)
     print("Loading model ", model_path)
     mtp.load_state_dict(torch.load(model_path))
 
@@ -60,27 +60,29 @@ def dump_mtp_pred(helper, config, model_path, output_dir):
     torch.set_grad_enabled(False)
 
     static_layer_rasterizer = StaticLayerRasterizer(helper)
-    agent_rasterizer = AgentBoxesWithFadedHistory(helper, seconds_of_history=1)
+    agent_rasterizer = AgentBoxesWithFadedHistory(helper, seconds_of_history=2)
     mtp_input_representation = InputRepresentation(static_layer_rasterizer, agent_rasterizer, Rasterizer())
 
     model_preds = []
 
-    for token in dataset:
+    tokens = tqdm(dataset)
+
+    for token in tokens:
         instance_token_img, sample_token_img = token.split('_')
         agent_state_vector = torch.Tensor([[helper.get_velocity_for_agent(instance_token_img, sample_token_img),
                                             helper.get_acceleration_for_agent(instance_token_img, sample_token_img),
                                             helper.get_heading_change_rate_for_agent(instance_token_img,
-                                                                                     sample_token_img)]])
+                                                                                     sample_token_img)]]).to(device)
 
         img = mtp_input_representation.make_input_representation(instance_token_img, sample_token_img)
-        image_tensor = torch.Tensor(img).permute(2, 0, 1).unsqueeze(0)
+        image_tensor = torch.Tensor(img).to(device).permute(2, 0, 1).unsqueeze(0)
         out = mtp(image_tensor, agent_state_vector).squeeze()
         if torch.isnan(out).any():
             continue
 
-        pred_loc, scores = out[:-10], out[-10:].detach().numpy()
+        pred_loc, scores = out[:-10], out[-10:].cpu().detach().numpy()
         desired_shape = (10, -1, 2)
-        pred_loc = pred_loc.reshape(desired_shape).detach().numpy()
+        pred_loc = pred_loc.reshape(desired_shape).cpu().detach().numpy()
         # pred_loc = pred_loc.view(-1, 2, 10).permute(0, 2, 1).detach().numpy()
 
         annotation = helper.get_sample_annotation(instance_token_img, sample_token_img)
@@ -141,26 +143,30 @@ def dump_covernet_pred(helper, config, output_dir):
 
 if __name__ == '__main__':
     NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
-    model_path = '../models/MTP_02_04_2021_18_49_34.pth'
-    out_dir = '../out'
+    model_dir = '/scratch/rodney/models/nuScenes/MTP_04_09_2021_09_30_17'
+    model_path = model_dir + '/Epoch_15_04_09_2021_15_56_29.pth'
 
-    helper = nuScenes_load('v1.0-mini', NUSCENES_DATASET)
-    config = load_prediction_config(helper, '../config/eval_metric_config.json')
+    helper = nuScenes_load('v1.0-trainval', NUSCENES_DATASET)
+    dataset = get_prediction_challenge_split("val", NUSCENES_DATASET)
 
-    dump_cv_oracle_pred(helper, config, out_dir)
+    config = load_prediction_config(helper, '../../config/eval_metric_config.json')
 
-    # dump_mtp_pred(helper, config, model_path, out_dir)
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+    # dump_cv_oracle_pred(helper, config, out_dir)
+
+    dump_mtp_pred(dataset, helper, config, model_path, model_dir, device)
 
     # dump_covernet_pred(helper, config, out_dir)
 
     # print("[Eval] CV metrics")
     # eval_metrics('../out/cv_preds.json', helper, config, '../out/cv_metrics.json')
     #
-    print("[Eval] Oracle metrics")
-    eval_metrics('../out/oracle_preds.json', helper, config, '../out/oracle_metrics.json')
+    # print("[Eval] Oracle metrics")
+    # eval_metrics('../out/oracle_preds.json', helper, config, '../out/oracle_metrics.json')
 
-    # print("[Eval] MTP metrics")
-    # eval_metrics('../out/mtp_preds.json', helper, config, '../out/mtp_metrics.json')
+    print("[Eval] MTP metrics")
+    eval_metrics(model_dir + '/mtp_preds.json', helper, config, model_dir + '/mtp_metrics.json')
 
     # print("[Eval] CoverNet metrics")
     # eval_metrics('../out/covernet_preds.json', helper, config, '../out/covernet_metrics.json')
