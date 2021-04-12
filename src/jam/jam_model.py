@@ -95,6 +95,10 @@ class JAM_TFR(nn.Module):
         elif dec == 'fftc':
             self.dec_fc2 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2) * self.modes))
 
+        elif not dec:
+            print("[Warning] Using basic dec")
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((out_frames * 2) * self.modes))
+
         self.sm = nn.Softmax(dim=1)
 
         self.dropout = nn.Dropout(p=0.5)
@@ -151,11 +155,13 @@ class JAM_TFR(nn.Module):
 
         ### Decoder block
         conf = self.cls_fc1(out)
+        #conf = self.dropout(conf)
         conf = self.cls_fc2(conf)
 
         out = self.dec_fc1(out)
         out = self.l_relu(out)
 
+        #out = self.dropout(out)
         out = self.dec_fc2(out)
 
         out = out.view(x.size(0), self.modes, -1)
@@ -185,6 +191,10 @@ class JAM_TFR(nn.Module):
                 out_x, out_y = out[:, :, 7:, 0], out[:, :, 7:, 1]
             else:
                 out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
+
+        elif not self.dec:
+            out = out.view(x.size(0), self.modes, -1, 2)
+            out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
 
         if eval:
             # Testing

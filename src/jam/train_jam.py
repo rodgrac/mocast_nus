@@ -26,8 +26,8 @@ def forward_mm(data, model, device, criterion):
     history_mask = torch.flip(data['ego_mask_past'].to(device), [1])
 
     targets = data["ego_future"].to(device)
-    targets = torch.cat((history_window, targets), dim=1)
     target_mask = data['ego_mask_future'].to(device)
+    targets = torch.cat((history_window, targets), dim=1)
     target_mask = torch.cat((history_mask, target_mask), dim=1)
     # Forward pass
     outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len, data["agents_state"].to(device),
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     in_ch = 3
     out_pts = 12
     poly_deg = 5
-    num_modes = 16
+    num_modes = 10
     epochs = 15
     batch_size = 16
 
@@ -89,13 +89,13 @@ if __name__ == '__main__':
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
 
-    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-train.h5', transform)
-    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-val.h5', transform)
+    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-train-2s.h5', transform)
+    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-val-2s.h5', transform)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
 
@@ -106,7 +106,7 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), 1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=1e-4)
 
     sched = torch.optim.lr_scheduler.OneCycleLR(optimizer, 1e-3, epochs=epochs,
                                                 steps_per_epoch=len(train_dl))

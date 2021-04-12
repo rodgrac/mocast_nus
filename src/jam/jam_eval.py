@@ -35,8 +35,8 @@ def forward_mm(data, model, device, criterion, test_opt=False):
     history_mask = torch.flip(data['ego_mask_past'], [1]).to(device)
 
     targets = data["ego_future"].to(device)
-    targets = torch.cat((history_window, targets), dim=1)
     target_mask = data['ego_mask_future'].to(device)
+    targets = torch.cat((history_window, targets), dim=1)
     target_mask = torch.cat((history_mask, target_mask), dim=1)
 
     # if test_opt:
@@ -131,19 +131,18 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/JAM_TFR_04_07_2021_12_20_11'
-    model_path = model_out_dir + "/Epoch_25_04_07_2021_15_29_40.pth"
+    model_out_dir = model_out_dir_root + '/JAM_TFR_04_08_2021_21_36_22'
+    model_path = model_out_dir + "/Epoch_15_04_08_2021_23_51_11.pth"
     #ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
     in_ch = 3
     out_pts = 12
     poly_deg = 5
-    num_modes = 16
+    num_modes = 10
     batch_size = 16
 
-   # samples = [5427, 4143, 5256, 5063, 7353]
-    # samples = [50]
+    # samples = [5427, 4143, 5256, 5063, 7353]
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
@@ -178,7 +177,7 @@ if __name__ == '__main__':
     json.dump(model_preds, open(os.path.join(model_out_dir, 'mocast4_preds.json'), "w"))
 
     '''############################ Quantitative ###########################################'''
-    config = load_prediction_config(pred_helper, '../../config/eval_metric_config.json')
+    config = load_prediction_config(pred_helper, '../../config/eval_metric_config_1.json')
     print("[Eval] {} metrics".format(model.__class__.__name__ ))
     eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
@@ -227,9 +226,9 @@ if __name__ == '__main__':
                     path_effects=[pe.Stroke(linewidth=4, foreground='b'), pe.Normal()])
             plt.text(pred_cord[-1][0] + 10, pred_cord[-1][1], "{:0.2f}".format(val_scores[i][ind]))
 
-        fig, ax = plt.subplots(2, 5)
-        for j in range(10):
-            ax[j//5, j%5].grid(b=None)
-            ax[j//5, j%5].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
+        fig, ax = plt.subplots(2, 4)
+        for j in range(8):
+            ax[j//4, j%4].grid(b=None)
+            ax[j//4, j%4].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
     #
     plt.show()
