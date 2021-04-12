@@ -36,8 +36,9 @@ def forward_mm(data, model, device, criterion, test_opt=False):
 
     targets = data["agent_future"].to(device)
     target_mask = data['mask_future'].to(device)
-    targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, target_mask), dim=1)
+    if model.dec:
+        targets = torch.cat((history_window, targets), dim=1)
+        target_mask = torch.cat((history_mask, target_mask), dim=1)
 
     if test_opt:
         with torch.no_grad():
@@ -94,7 +95,10 @@ def dump_predictions(pred_out, scores, token, helper):
     for i in range(pred_out.shape[0]):
         pred_out[i, :, :] = convert_local_coords_to_global(pred_out[i, :, :], annotation['translation'],
                                                            annotation['rotation'])
-    pred_class = Prediction(instance, sample, pred_out[:, 7:, :], scores)
+    if dec_type:
+        pred_class = Prediction(instance, sample, pred_out[:, 7:, :], scores)
+    else:
+        pred_class = Prediction(instance, sample, pred_out, scores)
     return pred_class.serialize()
 
 
@@ -121,9 +125,9 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 
 if __name__ == '__main__':
     torch.cuda.empty_cache()
-    model_out_dir_root = '/scratch/rodney/models/nuScenes'
-    model_out_dir = model_out_dir_root + '/MOCAST_4_04_08_2021_09_37_55'
-    model_path = model_out_dir + "/Epoch_15_04_08_2021_12_58_47.pth"
+    model_out_dir_root = '/scratch/rodney/models/nusc_sota'
+    model_out_dir = model_out_dir_root + '/MOCAST_4_03_17_2021_12_10_37'
+    model_path = model_out_dir + "/Epoch_15_03_17_2021_15_13_50.pth"
     ds_type = 'v1.0-trainval'
     # ds_type = 'v1.0-mini'
 
@@ -132,6 +136,7 @@ if __name__ == '__main__':
     poly_deg = 5
     num_modes = 10
     batch_size = 16
+    dec_type = 'ortho'
 
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
@@ -145,7 +150,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='poly').to(device)
+    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec=dec_type).to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path))
@@ -166,7 +171,7 @@ if __name__ == '__main__':
     json.dump(model_preds, open(os.path.join(model_out_dir, 'mocast4_preds.json'), "w"))
 
     '''############################ Quantitative ###########################################'''
-    config = load_prediction_config(pred_helper, '../config/eval_metric_config.json')
+    config = load_prediction_config(pred_helper, '../config/eval_metric_config_1.json')
     print("[Eval] {} metrics".format(model.__class__.__name__ ))
     eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''

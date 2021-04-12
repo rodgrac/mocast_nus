@@ -27,8 +27,9 @@ def forward_mm(data, model, device, criterion):
 
     targets = data["agent_future"].to(device)
     target_mask = data['mask_future'].to(device)
-    targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, target_mask), dim=1)
+    if model.dec:
+        targets = torch.cat((history_window, targets), dim=1)
+        target_mask = torch.cat((history_mask, target_mask), dim=1)
     # Forward pass
     outputs, scores = model(inputs, device, data["agent_state"].to(device), agent_seq_len, out_type=2)
 
@@ -84,6 +85,7 @@ if __name__ == '__main__':
     num_modes = 10
     epochs = 15
     batch_size = 16
+    dec_type = None
 
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
 
@@ -91,14 +93,14 @@ if __name__ == '__main__':
                                                                                 std=[0.229, 0.224, 0.225])])
 
     train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-train.h5', transform)
-    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-mini-val.h5', transform)
+    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-v1.0-trainval-val.h5', transform)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
-    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec='poly').to(device)
+    model = MOCAST_4(in_ch, out_pts, poly_deg, num_modes, dec=dec_type).to(device)
 
     model_out_dir = os.path.join(model_out_dir_root,
                                  model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))

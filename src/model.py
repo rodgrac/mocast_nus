@@ -192,12 +192,16 @@ class MOCAST_4(nn.Module):
         elif self.dec == 'polytr':
             self.t_n = torch.from_numpy(self.t_n)
             self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes + 1)
-        else:
+        elif self.dec in ['poly', 'ortho']:
             self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes)
             if self.dec == 'poly':
                 self.tmat = torch.from_numpy(np.vstack([self.t_n ** i for i in range(degree, -1, -1)]))
             elif self.dec == 'ortho':
                 self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
+
+        elif not self.dec:
+            print('[Warning] Using basic dec')
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=(out_frames * 2 * self.modes))
 
         self.sm = nn.Softmax(dim=1)
 
@@ -264,6 +268,9 @@ class MOCAST_4(nn.Module):
         elif self.dec == 'fftc':
             out = out.view(x.size(0), self.modes, -1, 2)
             out = torch.ifft(out, 1, normalized=True)
+            out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
+        elif not self.dec:
+            out = out.view(x.size(0), self.modes, -1, 2)
             out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
 
         if eval:
