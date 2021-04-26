@@ -9,10 +9,10 @@ from torchvision import transforms
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-from jam.jam_model import JAM_TFR
+from archII.archII_model import STSE_MHA
 from nusc_dataloader import NuScenes_HDF
 from utils import save_model_dict, find_closest_traj
-from jam.jam_eval import evaluate
+from archII.archII_eval import evaluate
 
 
 # Prints whole tensor for debug
@@ -21,26 +21,27 @@ from jam.jam_eval import evaluate
 def forward_mm(data, model, device, criterion):
     inputs = data["image"].to(device)
 
-    agent_seq_len = torch.sum(data["ego_mask_past"].to(device), dim=1)
-    history_window = torch.flip(data["ego_past"].to(device), [1])
-    history_mask = torch.flip(data['ego_mask_past'].to(device), [1])
+    ta_seq_len = torch.sum(data["ta_mask_past"][:, :5], dim=1).to(device)
+    ta_past = torch.flip(data["ta_past"][:, :hist_pts+1, :].to(device), [1])
+    ta_mask_past = torch.flip(data['ta_mask_past'][:, :hist_pts+1].to(device), [1])
 
-    targets = data["ego_future"].to(device)
-    target_mask = data['ego_mask_future'].to(device)
-    targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, target_mask), dim=1)
+    ta_coord = data["ta_future"].to(device)
+    ta_mask = data['ta_mask_future'].to(device)
+    ta_coord = torch.cat((ta_past, ta_coord), dim=1)
+    ta_mask = torch.cat((ta_mask_past, ta_mask), dim=1)
+
     # Forward pass
-    outputs, scores = model(inputs, device, data["ego_state"].to(device), agent_seq_len, data["agents_state"].to(device),
-                            data['agents_seq_len'].to(device), data['agents_rel_pos'].to(device), out_type=2)
+    outputs, scores = model(inputs, device, data["ta_state_hist"].to(device), ta_seq_len, data["sa_state_hist"].to(device),
+                            data['sa_sthist_len'].to(device), data['sa_grid_pos'].to(device), out_type=2)
 
-    labels = find_closest_traj(outputs, targets, target_mask)
+    labels = find_closest_traj(outputs, ta_coord, ta_mask)
 
-    loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
+    loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], ta_coord)
     loss_cls = criterion[1](scores, labels)
     loss = loss_reg + loss_cls
 
     # not all the output steps are valid, but we can filter them out from the loss using availabilities
-    loss = loss * torch.unsqueeze(target_mask, 2)
+    loss = loss * torch.unsqueeze(ta_mask, 2)
 
     loss = loss.mean()
     return loss, outputs
@@ -78,8 +79,9 @@ def train(model, train_dataloader, device, criterion, optim):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     in_ch = 3
-    out_pts = 12
-    poly_deg = 5
+    hist_pts = 12
+    fut_pts = 12
+    poly_deg = 7
     num_modes = 10
     epochs = 15
     batch_size = 16
@@ -89,15 +91,15 @@ if __name__ == '__main__':
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
 
-    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-train-2s.h5', transform)
-    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-v1.0-trainval-val-2s.h5', transform)
+    train_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-archII-v1.0-trainval-train.h5', transform)
+    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-archII-v1.0-trainval-val.h5', transform)
 
     train_dl = DataLoader(train_ds, shuffle=True, batch_size=batch_size, num_workers=batch_size)
     val_dl = DataLoader(val_ds, shuffle=False, batch_size=batch_size, num_workers=batch_size)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
+    model = STSE_MHA(in_ch, hist_pts, fut_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     model_out_dir = os.path.join(model_out_dir_root,
                                  model.__class__.__name__ + time.strftime("_%m_%d_%Y_%H_%M_%S", time.localtime()))

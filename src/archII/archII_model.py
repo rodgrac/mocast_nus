@@ -41,11 +41,13 @@ class MHAttention(nn.Module):
         return out, attn
 
 
-class JAM_TFR(nn.Module):
-    def __init__(self, in_ch, out_frames, degree, modes, dec='ortho'):
+class STSE_MHA(nn.Module):
+    def __init__(self, in_ch, hist_frames, fut_frames, degree, modes, dec='ortho'):
         super().__init__()
         self.degree = degree
         self.modes = modes
+        self.hist_pts = hist_frames
+        self.fut_pts = fut_frames
         self.dec = dec
         self.att_heads = 8
         self.att_dim = 64
@@ -56,7 +58,7 @@ class JAM_TFR(nn.Module):
 
         self.resnet_strip = ResNetConv_512(self.resnet)
 
-        print("Num modes: ", self.modes)
+        print("Num modes: {}; Decoder: {}; hist_pts: {}".format(self.modes, self.dec, self.hist_pts))
 
         # Agent state embedding (x, y, vel, acc, yawr)
         self.state_fc = nn.Linear(in_features=5, out_features=64)
@@ -83,7 +85,7 @@ class JAM_TFR(nn.Module):
         self.dec_fc1 = nn.Linear(in_features=2 * self.att_heads * self.att_dim, out_features=256)
         self.l_relu = nn.ReLU(inplace=True)
 
-        self.t_n = np.arange(-6, out_frames + 1, dtype=np.float32)
+        self.t_n = np.arange(-self.hist_pts, self.fut_pts + 1, dtype=np.float32)
 
         if not self.basis_norm:
             self.t_n = self.t_n / self.t_n[-1]
@@ -97,7 +99,7 @@ class JAM_TFR(nn.Module):
 
         elif not dec:
             print("[Warning] Using basic dec")
-            self.dec_fc2 = nn.Linear(in_features=256, out_features=((out_frames * 2) * self.modes))
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((self.fut_pts * 2) * self.modes))
 
         self.sm = nn.Softmax(dim=1)
 

@@ -11,7 +11,7 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 
-from jam.jam_model import JAM_TFR
+from archII.archII_model import STSE_MHA
 from nusc_dataloader import NuScenes_HDF
 from render_prediction import render_map, render_trajectories
 from utils import eval_metrics, clone_model_param, reset_param_data, find_closest_traj
@@ -30,14 +30,14 @@ NUSCENES_DATASET = '/scratch/rodney/datasets/nuScenes/'
 def forward_mm(data, model, device, criterion, test_opt=False):
     inputs = data["image"].to(device)
 
-    agent_seq_len = torch.sum(data["ego_mask_past"], dim=1).to(device)
-    history_window = torch.flip(data["ego_past"], [1]).to(device)
-    history_mask = torch.flip(data['ego_mask_past'], [1]).to(device)
+    ta_seq_len = torch.sum(data["ta_mask_past"][:, :5], dim=1).to(device)
+    ta_past = torch.flip(data["ta_past"][:, :model.hist_pts + 1, :].to(device), [1])
+    ta_mask_past = torch.flip(data['ta_mask_past'][:, :model.hist_pts + 1].to(device), [1])
 
-    targets = data["ego_future"].to(device)
-    target_mask = data['ego_mask_future'].to(device)
-    targets = torch.cat((history_window, targets), dim=1)
-    target_mask = torch.cat((history_mask, target_mask), dim=1)
+    ta_coord = data["ta_future"].to(device)
+    ta_mask = data['ta_mask_future'].to(device)
+    ta_coord = torch.cat((ta_past, ta_coord), dim=1)
+    ta_mask = torch.cat((ta_mask_past, ta_mask), dim=1)
 
     # if test_opt:
     #     with torch.no_grad():
@@ -51,18 +51,18 @@ def forward_mm(data, model, device, criterion, test_opt=False):
     #     torch.set_grad_enabled(False)
 
     with torch.no_grad():
-        outputs, scores, attn_map = model(inputs, device, data["ego_state"].to(device), agent_seq_len,
-                                data["agents_state"].to(device), data['agents_seq_len'].to(device),
-                                data['agents_rel_pos'].to(device), out_type=2, eval=True)
+        outputs, scores, attn_map = model(inputs, device, data["ta_state_hist"].to(device), ta_seq_len,
+                                          data["sa_state_hist"].to(device), data['sa_sthist_len'].to(device),
+                                          data['sa_grid_pos'].to(device), out_type=2, eval=True)
 
-        labels = find_closest_traj(outputs, targets, target_mask)
+        labels = find_closest_traj(outputs, ta_coord, ta_mask)
 
-        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], targets)
+        loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], ta_coord)
         loss_cls = criterion[1](scores, labels)
         loss = loss_reg + loss_cls
 
         # not all the output steps are valid, apply mask to ignore invalid ones
-        loss = loss * torch.unsqueeze(target_mask, 2)
+        loss = loss * torch.unsqueeze(ta_mask, 2)
         loss = loss.mean()
 
     # if test_opt:
@@ -99,7 +99,7 @@ def dump_predictions(pred_out, scores, token, helper):
     for i in range(pred_out.shape[0]):
         pred_out[i, :, :] = convert_local_coords_to_global(pred_out[i, :, :], annotation['translation'],
                                                            annotation['rotation'])
-    pred_class = Prediction(instance, sample, pred_out[:, 7:, :], scores)
+    pred_class = Prediction(instance, sample, pred_out[:, hist_pts+1:, :], scores)
     return pred_class.serialize()
 
 
@@ -115,7 +115,7 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
 
     progress_bar = tqdm(val_dl)
     for i, data in enumerate(progress_bar):
-        #if i in samples:
+        # if i in samples:
         outputs, scores, val_loss, attn_map = forward_mm(data, model, device, criterion, test_opt=test_opt)
 
         val_out_.extend(outputs.cpu().numpy())
@@ -133,12 +133,13 @@ if __name__ == '__main__':
     model_out_dir_root = '/scratch/rodney/models/nuScenes'
     model_out_dir = model_out_dir_root + '/JAM_TFR_04_08_2021_21_36_22'
     model_path = model_out_dir + "/Epoch_15_04_08_2021_23_51_11.pth"
-    #ds_type = 'v1.0-mini'
+    # ds_type = 'v1.0-mini'
     ds_type = 'v1.0-trainval'
 
     in_ch = 3
-    out_pts = 12
-    poly_deg = 5
+    hist_pts = 12
+    fut_pts = 12
+    poly_deg = 7
     num_modes = 10
     batch_size = 16
 
@@ -147,7 +148,8 @@ if __name__ == '__main__':
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])])
 
-    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-jam-' + ds_type + '-val.h5', transform)
+    val_ds = NuScenes_HDF('/scratch/rodney/datasets/nuScenes/processed/nuscenes-archII-' + ds_type + '-val.h5',
+                          transform)
 
     nuscenes = NuScenes(ds_type, dataroot=NUSCENES_DATASET)
     pred_helper = PredictHelper(nuscenes)
@@ -156,7 +158,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = JAM_TFR(in_ch, out_pts, poly_deg, num_modes, dec='ortho').to(device)
+    model = STSE_MHA(in_ch, hist_pts, fut_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path, map_location=torch.device(device)))
@@ -164,7 +166,8 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    val_out, val_scores, val_tokens, attn_maps, val_losses = evaluate(model, val_dl, device, [criterion_reg, criterion_cls])
+    val_out, val_scores, val_tokens, attn_maps, val_losses = evaluate(model, val_dl, device,
+                                                                      [criterion_reg, criterion_cls])
 
     print("Avg val loss: {:.4f}".format(np.mean(val_losses)))
 
@@ -178,12 +181,12 @@ if __name__ == '__main__':
 
     '''############################ Quantitative ###########################################'''
     config = load_prediction_config(pred_helper, '../../config/eval_metric_config_1.json')
-    print("[Eval] {} metrics".format(model.__class__.__name__ ))
+    print("[Eval] {} metrics".format(model.__class__.__name__))
     eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
     exit()
 
-    #for i in np.random.randint(0, len(val_out), 1):
+    # for i in np.random.randint(0, len(val_out), 1):
     for i in range(len(val_out)):
         img = render_map(pred_helper, val_tokens[i])
         gt_cord = render_trajectories(pred_helper, val_tokens[i])
@@ -191,8 +194,8 @@ if __name__ == '__main__':
         ax.grid(b=None)
         ax.imshow(img)
         gt_n = gt_cord.shape[0]
-        ax.plot(gt_cord[:gt_n-12, 0],
-                gt_cord[:gt_n-12, 1],
+        ax.plot(gt_cord[:gt_n - 12, 0],
+                gt_cord[:gt_n - 12, 1],
                 'w--^',
                 linewidth=3,
                 markersize=2,
@@ -228,7 +231,7 @@ if __name__ == '__main__':
 
         fig, ax = plt.subplots(2, 4)
         for j in range(8):
-            ax[j//4, j%4].grid(b=None)
-            ax[j//4, j%4].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
+            ax[j // 4, j % 4].grid(b=None)
+            ax[j // 4, j % 4].imshow(attn_maps[i][j].view(7, 7).cpu().numpy())
     #
     plt.show()
