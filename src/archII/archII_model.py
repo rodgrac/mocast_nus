@@ -41,24 +41,15 @@ class MHAttention(nn.Module):
         return out, attn
 
 
-class STSE_MHA(nn.Module):
-    def __init__(self, in_ch, hist_frames, fut_frames, degree, modes, dec='ortho'):
-        super().__init__()
-        self.degree = degree
-        self.modes = modes
-        self.hist_pts = hist_frames
-        self.fut_pts = fut_frames
-        self.dec = dec
-        self.att_heads = 8
-        self.att_dim = 64
-        self.basis_norm = False
+class STSE_Encoder(nn.Module):
+    def __init__(self, in_ch, heads, att_dim):
+        super(STSE_Encoder, self).__init__()
+
         self.resnet = resnet50(pretrained=True)
         self.resnet.conv1 = nn.Conv2d(in_ch, self.resnet.conv1.out_channels, kernel_size=self.resnet.conv1.kernel_size,
                                       stride=self.resnet.conv1.stride, padding=self.resnet.conv1.padding, bias=False)
 
         self.resnet_strip = ResNetConv_512(self.resnet)
-
-        print("Num modes: {}; Decoder: {}; hist_pts: {}".format(self.modes, self.dec, self.hist_pts))
 
         # Agent state embedding (x, y, vel, acc, yawr)
         self.state_fc = nn.Linear(in_features=5, out_features=64)
@@ -70,40 +61,13 @@ class STSE_MHA(nn.Module):
         self.enc_bn1 = nn.BatchNorm2d(512)
         self.enc_act = nn.ReLU(inplace=True)
 
-        self.enc_conv2 = nn.Conv2d(512, self.att_heads * self.att_dim, kernel_size=3, stride=2, padding=1, bias=False)
+        self.enc_conv2 = nn.Conv2d(512, heads * att_dim, kernel_size=3, stride=2, padding=1, bias=False)
         # self.enc_ln2 = nn.LayerNorm([512, 7, 7])
-        self.enc_bn2 = nn.BatchNorm2d(self.att_heads * self.att_dim)
+        self.enc_bn2 = nn.BatchNorm2d(heads * att_dim)
         # self.enc_avg_pool = nn.AvgPool2d(7)
-        self.ego_fc = nn.Linear(in_features=self.att_heads * self.att_dim + 64,
-                                out_features=self.att_heads * self.att_dim)
+        self.ego_fc = nn.Linear(in_features=heads * att_dim + 64, out_features=heads * att_dim)
 
-        self.mh_att = MHAttention(self.att_heads, self.att_dim)
-
-        self.cls_fc1 = nn.Linear(in_features=2 * self.att_heads * self.att_dim, out_features=256)
-        self.cls_fc2 = nn.Linear(in_features=256, out_features=modes)
-
-        self.dec_fc1 = nn.Linear(in_features=2 * self.att_heads * self.att_dim, out_features=256)
-        self.l_relu = nn.ReLU(inplace=True)
-
-        self.t_n = np.arange(-self.hist_pts, self.fut_pts + 1, dtype=np.float32)
-
-        if not self.basis_norm:
-            self.t_n = self.t_n / self.t_n[-1]
-
-        if dec == 'ortho':
-            self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * self.modes)
-            # Legendre Orthogonal basis matrix
-            self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
-        elif dec == 'fftc':
-            self.dec_fc2 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2) * self.modes))
-
-        elif not dec:
-            print("[Warning] Using basic dec")
-            self.dec_fc2 = nn.Linear(in_features=256, out_features=((self.fut_pts * 2) * self.modes))
-
-        self.sm = nn.Softmax(dim=1)
-
-        self.dropout = nn.Dropout(p=0.5)
+        self.mh_att = MHAttention(heads, att_dim)
 
     # Variable length state LSTM
     def state_lstm(self, state, state_len, device, eval=False):
@@ -121,9 +85,8 @@ class STSE_MHA(nn.Module):
         lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first=True)
         return self.enc_lstm_fc(lstm_out[torch.arange(lstm_out.size(0)), state_len - 1, :])
 
-    def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos, out_type=2,
-                eval=False):
-        ### Encoder block
+    def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos, eval=False):
+
         agents_grid_pos = agents_grid_pos.type(torch.LongTensor)
         cnn_tensor = self.resnet_strip(x)
         state_tensor = torch.zeros(cnn_tensor.size(0), cnn_tensor.size(2), cnn_tensor.size(3), 64).to(device)
@@ -153,23 +116,60 @@ class STSE_MHA(nn.Module):
         out, attn = self.mh_att(ego_tensor, out, out)
 
         out = torch.cat((out, ego_tensor), dim=1)
-        # out = self.enc_cat_fc(out)
 
-        ### Decoder block
-        conf = self.cls_fc1(out)
-        #conf = self.dropout(conf)
+        return out, attn
+
+
+class STSE_Classifier(nn.Module):
+    def __init__(self, heads, att_dim, modes):
+        super(STSE_Classifier, self).__init__()
+        self.cls_fc1 = nn.Linear(in_features=2 * heads * att_dim, out_features=256)
+        self.cls_fc2 = nn.Linear(in_features=256, out_features=modes)
+        self.l_relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        conf = self.cls_fc1(x)
+        # conf = self.dropout(conf)
         conf = self.cls_fc2(conf)
 
-        out = self.dec_fc1(out)
+        return conf
+
+
+class STSE_Decoder(nn.Module):
+    def __init__(self, heads, att_dim, modes, degree, dec, hist_pts, fut_pts):
+        super(STSE_Decoder, self).__init__()
+        self.modes = modes
+        self.degree = degree
+        self.basis_norm = False
+        self.dec = dec
+
+        self.dec_fc1 = nn.Linear(in_features=2 * heads * att_dim, out_features=256)
+        self.l_relu = nn.ReLU(inplace=True)
+
+        self.t_n = np.arange(-hist_pts, fut_pts + 1, dtype=np.float32)
+
+        if not self.basis_norm:
+            self.t_n = self.t_n / self.t_n[-1]
+
+        if dec == 'ortho':
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((degree + 1) * 2) * modes)
+            # Legendre Orthogonal basis matrix
+            self.tmat = torch.from_numpy(Legendre_Normalized(np.expand_dims(self.t_n, 1), degree).tensor).T
+        elif dec == 'fftc':
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((self.t_n.shape[0] * 2) * modes))
+
+        elif not dec:
+            print("[Warning] Using basic dec")
+            self.dec_fc2 = nn.Linear(in_features=256, out_features=((fut_pts * 2) * modes))
+
+    def forward(self, x, out_type, device):
+        out = self.dec_fc1(x)
         out = self.l_relu(out)
 
-        #out = self.dropout(out)
+        # out = self.dropout(out)
         out = self.dec_fc2(out)
 
         out = out.view(x.size(0), self.modes, -1)
-
-        # conf = out[:, :, -1]
-        # out = out[:, :, :(self.degree + 1) * 2]
 
         if self.dec == 'ortho':
             self.tmat = self.tmat.to(device)
@@ -198,14 +198,55 @@ class STSE_MHA(nn.Module):
             out = out.view(x.size(0), self.modes, -1, 2)
             out_x, out_y = out[:, :, :, 0], out[:, :, :, 1]
 
+        return out_x, out_y
+
+
+class STSE_Main(nn.Module):
+    def __init__(self, in_ch, hist_frames, fut_frames, degree, modes, dec='ortho'):
+        super(STSE_Main, self).__init__()
+        self.att_heads = 8
+        self.att_dim = 64
+        self.hist_pts = hist_frames
+
+        print("Num modes: {}; Decoder: {}; hist_pts: {}".format(modes, dec, hist_frames))
+
+        self.enc_blk = STSE_Encoder(in_ch, self.att_heads, self.att_dim)
+
+        self.clsr_blk = STSE_Classifier(self.att_heads, self.att_dim, modes)
+
+        self.dec_blk = STSE_Decoder(self.att_heads, self.att_dim, modes, degree, dec, hist_frames, fut_frames)
+
+        self.sm = nn.Softmax(dim=1)
+
+        self.dropout = nn.Dropout(p=0.5)
+
+        self.regopt_parameters = [
+            {'params': self.enc_blk.parameters()},
+            {'params': self.dec_blk.parameters()},
+        ]
+
+    def forward(self, x, device, ego_state, ego_state_len, agents_state, agents_state_len, agents_grid_pos, out_type=2,
+                eval=False):
+
+        # Encoder with MHA
+        out, att_maps = self.enc_blk(x, device, ego_state, ego_state_len, agents_state, agents_state_len,
+                                     agents_grid_pos, eval)
+        # Classifier
+        conf = self.clsr_blk(out)
+
+        # Decoder
+        out_x, out_y = self.dec_blk(out, out_type, device)
+
         if eval:
             # Testing
             # Pick top N modes
-            (_, top_idx) = torch.topk(conf, 10)
-            out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
-            out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
-            conf = torch.gather(conf, 1, top_idx)
-            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach(), attn
+            # (_, top_idx) = torch.topk(conf, 10)
+            # out_x = torch.gather(out_x, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_x.size(2)))
+            # out_y = torch.gather(out_y, 1, top_idx.unsqueeze(dim=-1).repeat(1, 1, out_y.size(2)))
+            # conf = torch.gather(conf, 1, top_idx)
+            return torch.stack((out_x, out_y), dim=3).detach(), conf.detach(), att_maps
         else:
             # Training
             return torch.stack((out_x, out_y), dim=3), conf
+
+

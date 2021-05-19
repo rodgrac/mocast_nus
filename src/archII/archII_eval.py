@@ -11,7 +11,7 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 
-from archII.archII_model import STSE_MHA
+from archII.archII_model import STSE_Main
 from nusc_dataloader import NuScenes_HDF
 from render_prediction import render_map, render_trajectories
 from utils import eval_metrics, clone_model_param, reset_param_data, find_closest_traj
@@ -55,20 +55,18 @@ def forward_mm(data, model, device, criterion, test_opt=False):
                                           data["sa_state_hist"].to(device), data['sa_sthist_len'].to(device),
                                           data['sa_grid_pos'].to(device), out_type=2, eval=True)
 
-        labels = find_closest_traj(outputs, ta_coord, ta_mask)
+        labels = find_closest_traj(outputs, ta_coord, ta_mask).detach()
 
         loss_reg = criterion[0](outputs[torch.arange(outputs.size(0)), labels, :, :], ta_coord)
         loss_cls = criterion[1](scores, labels)
-        loss = loss_reg + loss_cls
 
         # not all the output steps are valid, apply mask to ignore invalid ones
-        loss = loss * torch.unsqueeze(ta_mask, 2)
-        loss = loss.mean()
+        loss_reg = loss_reg * torch.unsqueeze(ta_mask, 2)
 
     # if test_opt:
     #     reset_param_data(model.dec_fc2, org_model)
 
-    return outputs, model.sm(scores), loss.detach().cpu().numpy(), attn_map
+    return outputs, model.sm(scores), loss_reg.mean().detach().cpu().numpy(), loss_cls.mean().detach().cpu().numpy(), attn_map, labels
 
 
 def test_time_opt(data, fmodel, device):
@@ -107,8 +105,9 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
     val_out_ = []
     val_scores_ = []
     val_tokens_ = []
-    val_losses_ = []
+    val_reglosses_, val_clslosses_ = [], []
     attn_maps_ = []
+    gt_labels_ = []
 
     model.eval()
     torch.set_grad_enabled(False)
@@ -116,16 +115,18 @@ def evaluate(model, val_dl, device, criterion, test_opt=False):
     progress_bar = tqdm(val_dl)
     for i, data in enumerate(progress_bar):
         # if i in samples:
-        outputs, scores, val_loss, attn_map = forward_mm(data, model, device, criterion, test_opt=test_opt)
+        outputs, scores, val_regloss, val_clsloss, attn_map, gt_label = forward_mm(data, model, device, criterion, test_opt=test_opt)
 
         val_out_.extend(outputs.cpu().numpy())
         val_scores_.extend(scores.cpu().numpy())
         val_tokens_.extend(data["token"])
-        val_losses_.append(val_loss)
+        val_reglosses_.append(val_regloss)
+        val_clslosses_.append(val_clsloss)
+        gt_labels_.extend(gt_label.cpu().numpy())
         if attn_map is not None:
             attn_maps_.extend(attn_map)
 
-    return val_out_, val_scores_, val_tokens_, attn_maps_, val_losses_,
+    return val_out_, val_scores_, val_tokens_, attn_maps_, val_reglosses_, val_clslosses_, gt_labels_
 
 
 if __name__ == '__main__':
@@ -158,7 +159,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = STSE_MHA(in_ch, hist_pts, fut_pts, poly_deg, num_modes, dec='ortho').to(device)
+    model = STSE_Main(in_ch, hist_pts, fut_pts, poly_deg, num_modes, dec='ortho').to(device)
 
     print("Loading model ", model_path)
     model.load_state_dict(torch.load(model_path, map_location=torch.device(device)))
@@ -166,10 +167,10 @@ if __name__ == '__main__':
     criterion_reg = nn.MSELoss(reduction="none")
     criterion_cls = nn.CrossEntropyLoss()
 
-    val_out, val_scores, val_tokens, attn_maps, val_losses = evaluate(model, val_dl, device,
+    val_out, val_scores, val_tokens, attn_maps, val_reglosses, val_clslosses = evaluate(model, val_dl, device,
                                                                       [criterion_reg, criterion_cls])
 
-    print("Avg val loss: {:.4f}".format(np.mean(val_losses)))
+    print("Val avg reg loss: {:.4f}, cls loss: {:.4f}".format(np.mean(val_reglosses), np.mean(val_clslosses)))
 
     val_ds.close_hf()
 
@@ -180,7 +181,7 @@ if __name__ == '__main__':
     json.dump(model_preds, open(os.path.join(model_out_dir, 'mocast4_preds.json'), "w"))
 
     '''############################ Quantitative ###########################################'''
-    config = load_prediction_config(pred_helper, '../../config/eval_metric_config_1.json')
+    config = load_prediction_config(pred_helper, '../../config/eval_metric_config.json')
     print("[Eval] {} metrics".format(model.__class__.__name__))
     eval_metrics(model_out_dir + '/mocast4_preds.json', pred_helper, config, model_out_dir + '/mocast4_metrics.json')
     '''############################ Qualitative ###########################################'''
